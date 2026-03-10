@@ -1,0 +1,957 @@
+# SPFx Multi-Level Icon Navigation Web Part — Complete Guide
+
+## Architecture Overview
+
+```
+SharePoint List (NavigationConfig)
+        │
+        ▼
+SPFx Web Part (reads list via REST API)
+        │
+        ▼
+Renders Icon Grid with Expandable Menus
+   ├── Level 1: Top Icons (no URL — click expands sub-items)
+   │     ├── Level 2: Sub-items (some have URLs, some expand further)
+   │     │     ├── Level 3: Sub-sub-items (all have URLs)
+```
+
+---
+
+## STEP 1: Create the SharePoint List
+
+### List Name: `NavigationConfig`
+
+Go to **Site Contents → New → List** and create columns:
+
+| Column Name   | Type                          | Required | Description                                    |
+|---------------|-------------------------------|----------|------------------------------------------------|
+| Title         | Single line of text (default) | Yes      | Display name of the menu item                  |
+| IconUrl       | Single line of text           | No       | URL to icon image (only for top-level items)   |
+| ParentItem    | Lookup (this list → Title)    | No       | Empty = top-level; otherwise points to parent  |
+| LinkUrl       | Single line of text           | No       | Empty = expands children; filled = navigates   |
+| SortOrder     | Number                        | Yes      | Controls display order within same level       |
+| IsActive      | Yes/No                        | Yes      | Toggle items on/off without deleting           |
+| OpenInNewTab  | Yes/No                        | No       | Whether link opens in new browser tab          |
+| Description   | Single line of text           | No       | Tooltip text shown on hover                    |
+
+### Sample Data
+
+| Title                      | IconUrl                        | ParentItem              | LinkUrl                          | SortOrder | IsActive |
+|----------------------------|--------------------------------|-------------------------|----------------------------------|-----------|----------|
+| The People Page            | /sites/CBS/icons/people.png    |                         |                                  | 1         | Yes      |
+| Kaizen Administration      | /sites/CBS/icons/kaizen.png    |                         |                                  | 2         | Yes      |
+| Project and JDI Admin      | /sites/CBS/icons/project.png   |                         |                                  | 3         | Yes      |
+| Training Materials         | /sites/CBS/icons/training.png  |                         |                                  | 4         | Yes      |
+| CBS Processes              | /sites/CBS/icons/process.png   |                         |                                  | 5         | Yes      |
+| Crane University           | /sites/CBS/icons/university.png|                         |                                  | 6         | Yes      |
+| HR Policies                |                                | The People Page         | /sites/CBS/Pages/HR.aspx         | 1         | Yes      |
+| Employee Directory         |                                | The People Page         | /sites/CBS/Pages/Directory.aspx  | 2         | Yes      |
+| Org Charts                 |                                | The People Page         |                                  | 3         | Yes      |
+| Dept Org Chart             |                                | Org Charts              | /sites/CBS/Pages/DeptOrg.aspx    | 1         | Yes      |
+| Plant Org Chart            |                                | Org Charts              | /sites/CBS/Pages/PlantOrg.aspx   | 2         | Yes      |
+| Kaizen Events              |                                | Kaizen Administration   |                                  | 1         | Yes      |
+| Upcoming Events            |                                | Kaizen Events           | /sites/CBS/Pages/Upcoming.aspx   | 1         | Yes      |
+| Past Events                |                                | Kaizen Events           | /sites/CBS/Pages/Past.aspx       | 2         | Yes      |
+| Kaizen Templates           |                                | Kaizen Administration   | /sites/CBS/Pages/Templates.aspx  | 2         | Yes      |
+| Tools for Growth           | /sites/CBS/icons/growth.png    |                         |                                  | 7         | Yes      |
+| Strategy Deployment        | /sites/CBS/icons/strategy.png  |                         |                                  | 8         | Yes      |
+| Event Based Training       | /sites/CBS/icons/event.png     |                         |                                  | 9         | Yes      |
+| Non-event Based Training   | /sites/CBS/icons/nonevent.png  |                         |                                  | 10        | Yes      |
+| Value Stream Linkage       | /sites/CBS/icons/value.png     |                         |                                  | 11        | Yes      |
+| Tools and Templates        | /sites/CBS/icons/tools.png     |                         |                                  | 12        | Yes      |
+
+---
+
+## STEP 2: Set Up SPFx Development Environment
+
+Run these commands on your dev machine:
+
+```bash
+# 1. Install Node.js LTS (v16.x or v18.x depending on your SPFx version)
+# Download from https://nodejs.org
+
+# 2. Install Yeoman and SPFx generator
+npm install -g yo @microsoft/generator-sharepoint
+
+# 3. Install Gulp
+npm install -g gulp-cli
+```
+
+---
+
+## STEP 3: Scaffold the SPFx Project
+
+```bash
+# Create project folder
+mkdir icon-nav-webpart
+cd icon-nav-webpart
+
+# Run the generator
+yo @microsoft/sharepoint
+```
+
+Answer the prompts:
+- **Solution name:** icon-nav-webpart
+- **Target:** SharePoint On-Premises (choose your version — 2016/2019/SE)
+- **Component type:** WebPart
+- **Web part name:** IconNavigation
+- **Template:** No JavaScript framework (we'll use vanilla TypeScript + DOM)
+
+---
+
+## STEP 4: Install Dependencies
+
+```bash
+# PnPjs for easy SharePoint REST calls
+npm install @pnp/sp @pnp/logging @pnp/common @pnp/odata
+```
+
+---
+
+## STEP 5: Project File Structure
+
+```
+src/
+  webparts/
+    iconNavigation/
+      IconNavigationWebPart.ts          ← Main web part class
+      IconNavigationWebPart.module.scss ← Styles
+      models/
+        INavigationItem.ts              ← Data interface
+      services/
+        NavigationService.ts            ← List data fetcher
+      components/
+        NavigationRenderer.ts           ← DOM rendering logic
+```
+
+---
+
+## STEP 6: The Code
+
+### 6A. Data Model — `src/webparts/iconNavigation/models/INavigationItem.ts`
+
+```typescript
+export interface INavigationItem {
+  Id: number;
+  Title: string;
+  IconUrl: string;
+  ParentItemId: number | null;
+  LinkUrl: string;
+  SortOrder: number;
+  IsActive: boolean;
+  OpenInNewTab: boolean;
+  Description: string;
+  // Computed at runtime
+  children?: INavigationItem[];
+  isExpanded?: boolean;
+  level?: number;
+}
+```
+
+### 6B. Data Service — `src/webparts/iconNavigation/services/NavigationService.ts`
+
+```typescript
+import { SPHttpClient, SPHttpClientResponse } from '@microsoft/sp-http';
+import { INavigationItem } from '../models/INavigationItem';
+
+export class NavigationService {
+  private spHttpClient: SPHttpClient;
+  private siteUrl: string;
+  private listName: string;
+
+  constructor(spHttpClient: SPHttpClient, siteUrl: string, listName: string) {
+    this.spHttpClient = spHttpClient;
+    this.siteUrl = siteUrl;
+    this.listName = listName;
+  }
+
+  /**
+   * Fetch all active nav items from the SharePoint list
+   */
+  public async getNavigationItems(): Promise<INavigationItem[]> {
+    const apiUrl = `${this.siteUrl}/_api/web/lists/getbytitle('${this.listName}')/items`
+      + `?$select=Id,Title,IconUrl,ParentItem/Id,ParentItem/Title,LinkUrl,SortOrder,IsActive,OpenInNewTab,Description`
+      + `&$expand=ParentItem`
+      + `&$filter=IsActive eq 1`
+      + `&$orderby=SortOrder asc`
+      + `&$top=500`;
+
+    const response: SPHttpClientResponse = await this.spHttpClient.get(
+      apiUrl,
+      SPHttpClient.configurations.v1
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch navigation items: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    return data.value.map((item: any) => ({
+      Id: item.Id,
+      Title: item.Title,
+      IconUrl: item.IconUrl || '',
+      ParentItemId: item.ParentItem ? item.ParentItem.Id : null,
+      LinkUrl: item.LinkUrl || '',
+      SortOrder: item.SortOrder || 0,
+      IsActive: item.IsActive,
+      OpenInNewTab: item.OpenInNewTab || false,
+      Description: item.Description || '',
+      children: [],
+      isExpanded: false,
+      level: 0
+    }));
+  }
+
+  /**
+   * Build a tree structure from the flat list
+   */
+  public buildTree(items: INavigationItem[]): INavigationItem[] {
+    const itemMap: Map<number, INavigationItem> = new Map();
+    const roots: INavigationItem[] = [];
+
+    // Index all items by Id
+    items.forEach(item => {
+      item.children = [];
+      item.isExpanded = false;
+      itemMap.set(item.Id, item);
+    });
+
+    // Build parent-child relationships
+    items.forEach(item => {
+      if (item.ParentItemId && itemMap.has(item.ParentItemId)) {
+        const parent = itemMap.get(item.ParentItemId)!;
+        item.level = (parent.level || 0) + 1;
+        parent.children!.push(item);
+      } else {
+        item.level = 0;
+        roots.push(item);
+      }
+    });
+
+    // Sort children at each level
+    const sortChildren = (nodes: INavigationItem[]) => {
+      nodes.sort((a, b) => a.SortOrder - b.SortOrder);
+      nodes.forEach(node => {
+        if (node.children && node.children.length > 0) {
+          sortChildren(node.children);
+        }
+      });
+    };
+    sortChildren(roots);
+
+    return roots;
+  }
+}
+```
+
+### 6C. Renderer — `src/webparts/iconNavigation/components/NavigationRenderer.ts`
+
+```typescript
+import { INavigationItem } from '../models/INavigationItem';
+import styles from '../IconNavigationWebPart.module.scss';
+
+export class NavigationRenderer {
+  private container: HTMLElement;
+  private navigationTree: INavigationItem[];
+
+  constructor(container: HTMLElement) {
+    this.container = container;
+    this.navigationTree = [];
+  }
+
+  /**
+   * Main render method
+   */
+  public render(tree: INavigationItem[]): void {
+    this.navigationTree = tree;
+    this.container.innerHTML = '';
+
+    // ── Section 1: Top-level icon grid ──
+    const gridContainer = document.createElement('div');
+    gridContainer.className = styles.iconGrid;
+
+    tree.forEach(item => {
+      const iconTile = this.createIconTile(item);
+      gridContainer.appendChild(iconTile);
+    });
+
+    this.container.appendChild(gridContainer);
+
+    // ── Section 2: Expandable sub-menu area ──
+    const submenuArea = document.createElement('div');
+    submenuArea.className = styles.submenuArea;
+    submenuArea.id = 'submenu-area';
+    this.container.appendChild(submenuArea);
+  }
+
+  /**
+   * Create a clickable icon tile for top-level items
+   */
+  private createIconTile(item: INavigationItem): HTMLElement {
+    const tile = document.createElement('div');
+    tile.className = styles.iconTile;
+    tile.setAttribute('data-item-id', item.Id.toString());
+    tile.title = item.Description || item.Title;
+
+    // Icon image
+    if (item.IconUrl) {
+      const img = document.createElement('img');
+      img.src = item.IconUrl;
+      img.alt = item.Title;
+      img.className = styles.iconImage;
+      tile.appendChild(img);
+    } else {
+      // Fallback: first letter
+      const placeholder = document.createElement('div');
+      placeholder.className = styles.iconPlaceholder;
+      placeholder.textContent = item.Title.charAt(0).toUpperCase();
+      tile.appendChild(placeholder);
+    }
+
+    // Label
+    const label = document.createElement('span');
+    label.className = styles.iconLabel;
+    label.textContent = item.Title;
+    tile.appendChild(label);
+
+    // Click handler
+    tile.addEventListener('click', () => this.handleTopLevelClick(item, tile));
+
+    return tile;
+  }
+
+  /**
+   * Handle click on a top-level icon
+   */
+  private handleTopLevelClick(item: INavigationItem, tileElement: HTMLElement): void {
+    const submenuArea = document.getElementById('submenu-area')!;
+
+    // Toggle: if already expanded, collapse
+    if (item.isExpanded) {
+      item.isExpanded = false;
+      tileElement.classList.remove(styles.activeTile);
+      submenuArea.innerHTML = '';
+      submenuArea.classList.remove(styles.submenuVisible);
+      return;
+    }
+
+    // Collapse any other expanded top-level item
+    this.navigationTree.forEach(navItem => {
+      navItem.isExpanded = false;
+    });
+    document.querySelectorAll(`.${styles.activeTile}`).forEach(el => {
+      el.classList.remove(styles.activeTile);
+    });
+
+    // Expand this item
+    item.isExpanded = true;
+    tileElement.classList.add(styles.activeTile);
+
+    // Render sub-items
+    submenuArea.innerHTML = '';
+    if (item.children && item.children.length > 0) {
+      // Arrow pointer to show which icon is expanded
+      const arrow = document.createElement('div');
+      arrow.className = styles.submenuArrow;
+      // Position arrow under the clicked tile
+      const tileRect = tileElement.getBoundingClientRect();
+      const containerRect = this.container.getBoundingClientRect();
+      arrow.style.left = `${tileRect.left - containerRect.left + tileRect.width / 2 - 10}px`;
+      submenuArea.appendChild(arrow);
+
+      // Header
+      const header = document.createElement('div');
+      header.className = styles.submenuHeader;
+      header.textContent = item.Title;
+      submenuArea.appendChild(header);
+
+      // Sub-items list
+      const subList = this.createSubmenuList(item.children, 1);
+      submenuArea.appendChild(subList);
+      submenuArea.classList.add(styles.submenuVisible);
+    }
+  }
+
+  /**
+   * Recursively create sub-menu list
+   */
+  private createSubmenuList(items: INavigationItem[], level: number): HTMLElement {
+    const list = document.createElement('ul');
+    list.className = `${styles.submenuList} ${styles[`level${level}`] || ''}`;
+
+    items.forEach(item => {
+      const li = document.createElement('li');
+      li.className = styles.submenuItem;
+
+      const hasChildren = item.children && item.children.length > 0;
+      const hasLink = item.LinkUrl && item.LinkUrl.trim() !== '';
+
+      // Create the clickable row
+      const row = document.createElement('div');
+      row.className = styles.submenuRow;
+
+      if (hasLink && !hasChildren) {
+        // ── This item has a URL → render as a link ──
+        const link = document.createElement('a');
+        link.href = item.LinkUrl;
+        link.textContent = item.Title;
+        link.className = styles.submenuLink;
+        if (item.OpenInNewTab) {
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+        }
+        row.appendChild(link);
+      } else if (hasChildren) {
+        // ── This item has children → render as expandable ──
+        const toggle = document.createElement('span');
+        toggle.className = styles.submenuToggle;
+        toggle.textContent = item.Title;
+        row.appendChild(toggle);
+
+        // Expand/collapse chevron
+        const chevron = document.createElement('span');
+        chevron.className = styles.chevron;
+        chevron.innerHTML = '&#9654;'; // ▶ right arrow
+        row.appendChild(chevron);
+
+        // Child container (hidden initially)
+        const childContainer = document.createElement('div');
+        childContainer.className = styles.childContainer;
+        childContainer.style.display = 'none';
+
+        const childList = this.createSubmenuList(item.children!, level + 1);
+        childContainer.appendChild(childList);
+
+        // Click handler for expand/collapse
+        row.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const isVisible = childContainer.style.display !== 'none';
+          childContainer.style.display = isVisible ? 'none' : 'block';
+          chevron.classList.toggle(styles.chevronExpanded);
+          row.classList.toggle(styles.submenuRowExpanded);
+        });
+
+        li.appendChild(row);
+        li.appendChild(childContainer);
+        list.appendChild(li);
+        return; // skip the default append below
+      } else {
+        // No URL, no children — just a label
+        const span = document.createElement('span');
+        span.textContent = item.Title;
+        span.className = styles.submenuLabel;
+        row.appendChild(span);
+      }
+
+      li.appendChild(row);
+      list.appendChild(li);
+    });
+
+    return list;
+  }
+
+  /**
+   * Show loading state
+   */
+  public renderLoading(): void {
+    this.container.innerHTML = `
+      <div class="${styles.loading}">
+        <div class="${styles.spinner}"></div>
+        <span>Loading navigation...</span>
+      </div>
+    `;
+  }
+
+  /**
+   * Show error state
+   */
+  public renderError(message: string): void {
+    this.container.innerHTML = `
+      <div class="${styles.error}">
+        <span class="${styles.errorIcon}">⚠</span>
+        <span>${message}</span>
+        <button class="${styles.retryButton}" id="retry-btn">Retry</button>
+      </div>
+    `;
+  }
+}
+```
+
+### 6D. Styles — `src/webparts/iconNavigation/IconNavigationWebPart.module.scss`
+
+```scss
+/* ============================================
+   COLOR SCHEME (matching the Crane NXT brand)
+   ============================================ */
+$primary-blue: #1a5276;
+$secondary-blue: #2e86c1;
+$gold: #b7950b;
+$light-bg: #f8f9fa;
+$border-color: #c9a227;
+$hover-bg: #eaf2f8;
+$text-dark: #2c3e50;
+$text-muted: #7f8c8d;
+
+/* ============================================
+   ICON GRID (Top-level items)
+   ============================================ */
+.iconGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 20px;
+  justify-content: flex-start;
+}
+
+.iconTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 140px;
+  height: 140px;
+  border: 2px solid $border-color;
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 12px;
+  text-align: center;
+
+  &:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-color: $primary-blue;
+  }
+}
+
+.activeTile {
+  border-color: $secondary-blue;
+  background: $hover-bg;
+  box-shadow: 0 4px 12px rgba(46, 134, 193, 0.3);
+}
+
+.iconImage {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  margin-bottom: 8px;
+}
+
+.iconPlaceholder {
+  width: 64px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: bold;
+  color: $primary-blue;
+  background: $hover-bg;
+  border-radius: 50%;
+  margin-bottom: 8px;
+}
+
+.iconLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: $text-dark;
+  line-height: 1.3;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ============================================
+   SUBMENU AREA (Expands below the grid)
+   ============================================ */
+.submenuArea {
+  position: relative;
+  margin: 0 20px 20px;
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.3s ease, padding 0.3s ease;
+}
+
+.submenuVisible {
+  max-height: 600px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.submenuArrow {
+  position: absolute;
+  top: -10px;
+  width: 0;
+  height: 0;
+  border-left: 10px solid transparent;
+  border-right: 10px solid transparent;
+  border-bottom: 10px solid white;
+  z-index: 1;
+}
+
+.submenuHeader {
+  font-size: 18px;
+  font-weight: 700;
+  color: $primary-blue;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid $gold;
+}
+
+/* ============================================
+   SUBMENU LISTS
+   ============================================ */
+.submenuList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.submenuItem {
+  margin-bottom: 2px;
+}
+
+.submenuRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+
+  &:hover {
+    background: $hover-bg;
+  }
+}
+
+.submenuRowExpanded {
+  background: $hover-bg;
+  font-weight: 600;
+}
+
+.submenuLink {
+  color: $secondary-blue;
+  text-decoration: none;
+  font-size: 14px;
+  flex: 1;
+
+  &:hover {
+    text-decoration: underline;
+    color: $primary-blue;
+  }
+}
+
+.submenuToggle {
+  color: $text-dark;
+  font-size: 14px;
+  flex: 1;
+  user-select: none;
+}
+
+.submenuLabel {
+  color: $text-muted;
+  font-size: 14px;
+}
+
+/* ============================================
+   CHEVRON (expand/collapse indicator)
+   ============================================ */
+.chevron {
+  font-size: 10px;
+  color: $text-muted;
+  transition: transform 0.2s ease;
+  margin-left: 8px;
+}
+
+.chevronExpanded {
+  transform: rotate(90deg);
+}
+
+/* ============================================
+   CHILD CONTAINER (nested sub-sub items)
+   ============================================ */
+.childContainer {
+  padding-left: 20px;
+  border-left: 2px solid $gold;
+  margin-left: 14px;
+  margin-top: 4px;
+}
+
+/* Deeper nesting indentation */
+.level2 .submenuRow {
+  padding-left: 10px;
+}
+
+.level3 .submenuRow {
+  padding-left: 10px;
+}
+
+/* ============================================
+   LOADING / ERROR STATES
+   ============================================ */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  gap: 12px;
+  color: $text-muted;
+}
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid #dee2e6;
+  border-top-color: $secondary-blue;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 30px;
+  background: #fdf2f2;
+  border: 1px solid #e74c3c;
+  border-radius: 6px;
+  margin: 20px;
+}
+
+.errorIcon {
+  font-size: 20px;
+}
+
+.retryButton {
+  padding: 6px 16px;
+  background: $secondary-blue;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+
+  &:hover {
+    background: $primary-blue;
+  }
+}
+
+/* ============================================
+   WEB PART CONTAINER
+   ============================================ */
+.iconNavigation {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.sectionTitle {
+  font-size: 20px;
+  font-weight: 700;
+  color: $text-dark;
+  padding: 20px 20px 0;
+}
+
+.sectionSubtitle {
+  font-size: 13px;
+  color: $text-muted;
+  padding: 4px 20px 10px;
+}
+```
+
+### 6E. Main Web Part — `src/webparts/iconNavigation/IconNavigationWebPart.ts`
+
+```typescript
+import { Version } from '@microsoft/sp-core-library';
+import {
+  BaseClientSideWebPart,
+  IPropertyPaneConfiguration,
+  PropertyPaneTextField
+} from '@microsoft/sp-webpart-base';
+import { SPHttpClient } from '@microsoft/sp-http';
+
+import styles from './IconNavigationWebPart.module.scss';
+import { NavigationService } from './services/NavigationService';
+import { NavigationRenderer } from './components/NavigationRenderer';
+
+export interface IIconNavigationWebPartProps {
+  listName: string;
+  sectionTitle: string;
+  sectionSubtitle: string;
+}
+
+export default class IconNavigationWebPart extends BaseClientSideWebPart<IIconNavigationWebPartProps> {
+  private renderer: NavigationRenderer;
+  private navService: NavigationService;
+
+  public render(): void {
+    // Set up container
+    this.domElement.innerHTML = `
+      <div class="${styles.iconNavigation}">
+        <div class="${styles.sectionTitle}">${this.properties.sectionTitle || ''}</div>
+        <div class="${styles.sectionSubtitle}">${this.properties.sectionSubtitle || ''}</div>
+        <div id="nav-container"></div>
+      </div>
+    `;
+
+    const container = this.domElement.querySelector('#nav-container') as HTMLElement;
+    this.renderer = new NavigationRenderer(container);
+    this.navService = new NavigationService(
+      this.context.spHttpClient,
+      this.context.pageContext.web.absoluteUrl,
+      this.properties.listName || 'NavigationConfig'
+    );
+
+    this.loadNavigation();
+  }
+
+  private async loadNavigation(): Promise<void> {
+    this.renderer.renderLoading();
+
+    try {
+      const items = await this.navService.getNavigationItems();
+      const tree = this.navService.buildTree(items);
+      this.renderer.render(tree);
+    } catch (error) {
+      console.error('Navigation load error:', error);
+      this.renderer.renderError('Failed to load navigation. Check list permissions.');
+
+      // Retry button
+      const retryBtn = this.domElement.querySelector('#retry-btn');
+      if (retryBtn) {
+        retryBtn.addEventListener('click', () => this.loadNavigation());
+      }
+    }
+  }
+
+  protected get dataVersion(): Version {
+    return Version.parse('1.0');
+  }
+
+  protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
+    return {
+      pages: [
+        {
+          header: { description: 'Configure the Icon Navigation web part' },
+          groups: [
+            {
+              groupName: 'Data Source',
+              groupFields: [
+                PropertyPaneTextField('listName', {
+                  label: 'SharePoint List Name',
+                  description: 'Name of the list containing navigation items',
+                  value: 'NavigationConfig'
+                })
+              ]
+            },
+            {
+              groupName: 'Display',
+              groupFields: [
+                PropertyPaneTextField('sectionTitle', {
+                  label: 'Section Title',
+                  value: "You haven't taught until they have learned"
+                }),
+                PropertyPaneTextField('sectionSubtitle', {
+                  label: 'Section Subtitle',
+                  value: "All of the material needed to teach Crane NXT's world class business system can be found here."
+                })
+              ]
+            }
+          ]
+        }
+      ]
+    };
+  }
+}
+```
+
+---
+
+## STEP 7: Build & Deploy
+
+### For Development / Testing
+
+```bash
+# Build the project
+gulp build
+
+# Run locally with SharePoint workbench
+gulp serve
+
+# Navigate to: https://your-sharepoint-site/_layouts/15/workbench.aspx
+# Add the "IconNavigation" web part to the page
+```
+
+### For Production Deployment
+
+```bash
+# 1. Bundle for production
+gulp bundle --ship
+
+# 2. Package the solution
+gulp package-solution --ship
+
+# 3. The .sppkg file will be at:
+#    sharepoint/solution/icon-nav-webpart.sppkg
+```
+
+### Deploy to SharePoint On-Prem App Catalog
+
+1. Go to **Central Administration → Apps → Manage App Catalog**
+2. Upload the `.sppkg` file
+3. Trust the solution when prompted
+4. Go to your target site → **Site Contents → Add an App → IconNavigation**
+5. Edit any page → Add the **IconNavigation** web part
+6. In the web part property pane, set the list name to `NavigationConfig`
+
+---
+
+## STEP 8: Managing Navigation (No Code Changes Needed)
+
+### Adding a new top-level icon:
+1. Go to the `NavigationConfig` list
+2. Add a new item: Title = "New Section", IconUrl = "/path/to/icon.png", ParentItem = blank, SortOrder = next number
+
+### Adding a sub-item under an existing icon:
+1. Add a new item: Title = "Sub Page", ParentItem = select parent, LinkUrl = "/sites/.../page.aspx", SortOrder = 1
+
+### Adding a sub-sub-item:
+1. Add a new item: Title = "Sub Sub Page", ParentItem = select the sub-item (not the top icon), LinkUrl = "/sites/.../page.aspx", SortOrder = 1
+
+### Hiding an item temporarily:
+1. Edit the item → set IsActive = No
+
+### Reordering:
+1. Change SortOrder numbers. Items with lower numbers appear first.
+
+---
+
+## STEP 9: Icon Management
+
+Upload your icons to a document library (e.g., `/sites/CBS/SiteAssets/NavIcons/`) and reference them in the IconUrl column. Recommended format: PNG with transparent background, 128×128 px.
+
+---
+
+## Summary of What Admins Can Control via the List
+
+| Action                        | How                                           |
+|-------------------------------|-----------------------------------------------|
+| Add/remove top-level icons    | Add/delete rows with no ParentItem            |
+| Add/remove sub-items          | Add/delete rows with ParentItem set            |
+| Add sub-sub-items             | Set ParentItem to a sub-item (not top-level)  |
+| Change icon image             | Update IconUrl column                         |
+| Change link destination       | Update LinkUrl column                         |
+| Reorder items                 | Change SortOrder numbers                      |
+| Hide/show items               | Toggle IsActive                               |
+| Change label text             | Edit Title column                             |
+| Open link in new tab          | Set OpenInNewTab = Yes                        |
+| Add tooltip                   | Fill in Description column                    |
