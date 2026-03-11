@@ -1121,3 +1121,182 @@ Everything is managed from the **NavigationConfig** list:
 | Web part not found when adding       | Make sure .sppkg is deployed and trusted               |
 | Styles not showing                   | Hard refresh browser: Ctrl+Shift+R                    |
 | Property pane not opening            | Click pencil/edit icon on the web part                 |
+
+
+
+
+
+
+
+private _createSubmenuList(items: INavigationItem[], level: number): HTMLElement {
+  const container: HTMLElement = document.createElement('div');
+  container.className = 'iconNav-subGrid';
+
+  items.forEach((item: INavigationItem) => {
+    const hasChildren: boolean = (item.children || []).length > 0;
+    const hasLink: boolean = item.LinkUrl.trim() !== '';
+
+    // Create a tile box for each sub-item
+    const tile: HTMLElement = document.createElement('div');
+    tile.className = 'iconNav-subTile';
+
+    // Icon or fallback letter
+    if (item.IconUrl) {
+      const img: HTMLImageElement = document.createElement('img');
+      img.src = item.IconUrl;
+      img.alt = item.Title;
+      img.className = 'iconNav-subTileImg';
+      tile.appendChild(img);
+    } else {
+      const fb: HTMLElement = document.createElement('div');
+      fb.className = 'iconNav-subTileFallback';
+      fb.textContent = item.Title.charAt(0);
+      tile.appendChild(fb);
+    }
+
+    // Label
+    const label: HTMLElement = document.createElement('span');
+    label.className = 'iconNav-subTileLabel';
+    label.textContent = item.Title;
+    tile.appendChild(label);
+
+    // Child container (for sub-sub items)
+    const childWrap: HTMLElement = document.createElement('div');
+    childWrap.className = 'iconNav-childWrap';
+    childWrap.style.display = 'none';
+
+    if (hasLink && !hasChildren) {
+      // ── LINK: navigate on click ──
+      tile.addEventListener('click', () => {
+        if (item.OpenInNewTab) {
+          window.open(item.LinkUrl, '_blank');
+        } else {
+          window.location.href = item.LinkUrl;
+        }
+      });
+    } else if (hasChildren) {
+      // ── EXPANDABLE: show sub-sub-items as tiles ──
+      const chevron: HTMLElement = document.createElement('span');
+      chevron.className = 'iconNav-subChevron';
+      chevron.innerHTML = '&#9660;'; // ▼
+      tile.appendChild(chevron);
+
+      const childList: HTMLElement = this._createSubmenuList(item.children || [], level + 1);
+      childWrap.appendChild(childList);
+
+      tile.addEventListener('click', (e: Event) => {
+        e.stopPropagation();
+        const isOpen: boolean = childWrap.style.display !== 'none';
+        childWrap.style.display = isOpen ? 'none' : 'block';
+        chevron.classList.toggle('iconNav-subChevronOpen');
+        tile.classList.toggle('iconNav-subTileActive');
+      });
+    }
+
+    const wrapper: HTMLElement = document.createElement('div');
+    wrapper.className = 'iconNav-subTileWrapper';
+    wrapper.appendChild(tile);
+    wrapper.appendChild(childWrap);
+    container.appendChild(wrapper);
+  });
+
+  return container;
+}
+
+
+/* === SUB-ITEM TILES === */
+
+.iconNav-subGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 0;
+}
+
+.iconNav-subTileWrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.iconNav-subTile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 120px;
+  border: 2px solid #c9a227;
+  border-radius: 6px;
+  background: #ffffff;
+  cursor: pointer;
+  padding: 10px;
+  text-align: center;
+  transition: all 0.2s ease;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.iconNav-subTile:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+  border-color: #1a5276;
+}
+
+.iconNav-subTileActive {
+  border-color: #2e86c1 !important;
+  background: #eaf2f8 !important;
+}
+
+.iconNav-subTileImg {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  margin-bottom: 6px;
+}
+
+.iconNav-subTileFallback {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  font-weight: bold;
+  color: #1a5276;
+  background: #eaf2f8;
+  border-radius: 50%;
+  margin-bottom: 6px;
+}
+
+.iconNav-subTileLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: #2c3e50;
+  line-height: 1.2;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.iconNav-subChevron {
+  font-size: 8px;
+  color: #7f8c8d;
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  transition: transform 0.2s;
+}
+
+.iconNav-subChevronOpen {
+  transform: rotate(180deg);
+}
+
+.iconNav-childWrap {
+  padding-left: 0;
+  margin-top: 8px;
+  border-left: none;
+  margin-left: 0;
+}
