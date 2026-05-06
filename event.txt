@@ -1,0 +1,89 @@
+import { Log } from '@microsoft/sp-core-library';
+import {
+  BaseApplicationCustomizer
+} from '@microsoft/sp-application-base';
+const LOG_SOURCE: string = 'KaizenEventIdApplicationCustomizer';
+export interface IKaizenEventIdApplicationCustomizerProperties {
+}
+export default class KaizenEventIdApplicationCustomizer
+  extends BaseApplicationCustomizer<IKaizenEventIdApplicationCustomizerProperties> {
+  
+  public onInit(): Promise<void> {
+    Log.info(LOG_SOURCE, `Initialized -Checking for eventid parameter`);
+    const eventId = this.getEventIdFromUrl();
+    if(eventId) {
+      console.log('[KaizenEventId] Found eventID:', eventId);
+      this.injectEventIdIntoPowerApps(eventId);
+  }else{
+    console.log('[KaizenEventId] No eventID found in URL');
+  }
+  return Promise.resolve();
+}
+  private getEventIdFromUrl(): string | null{
+    const urlParams = new URLSearchParams(window.location.search);
+    return  urlParams.get('eventid') ||
+            urlParams.get('EventId') ||
+            urlParams.get('eventID') ||
+            urlParams.get('EventID');
+  }
+  private injectEventIdIntoPowerApps(eventId: string): void{
+    this.modifyPowerAppsIframe(eventId);
+    setTimeout(() => this.modifyPowerAppsIframe(eventId), 1000);
+    setTimeout(() => this.modifyPowerAppsIframe(eventId), 2000);
+    setTimeout(() => this.modifyPowerAppsIframe(eventId), 3000);
+    this.observeForPowerAppsIframe(eventId);
+  }
+  private modifyPowerAppsIframe(eventId: string): void {
+    const iframes = document.querySelectorAll('iframe');
+    for (let i =0; i < iframes.length; i++){
+      const iframe = iframes[i] as HTMLIFrameElement;
+      const src = iframe.src || '';
+      if(src.includes('powerapps.com')&& !src.includes('eventID=') && !src.includes('eventid=')){
+        const separator = src.includes('?')? '&' : '?';
+        const newSrc = `${src}${separator}eventid=${encodeURIComponent(eventId)}`;
+        console.log('[kaizenEventId] Injecting eventid into Power Apps');
+        console.log('[kaizenEventId] New URL:', newSrc);
+        iframe.src = newSrc;
+      }
+    }
+  }
+  private observeForPowerAppsIframe(eventId: string): void {
+    const observer = new MutationObserver((mutations: MutationRecord[]) => {
+      for(let m=0; m< mutations.length; m++){
+      const mutation = mutations[m];
+      for (let n =0; n< mutation.addedNodes.length;n++){
+        const node = mutation.addedNodes[n];
+        if(node.nodeType === Node.ELEMENT_NODE){
+        const element = node as HTMLElement;
+        if (element.tagName === 'IFRAME'){
+          const iframe = element as HTMLIFrameElement;
+          this.modifyIframeIfPowerApps(iframe, eventId);
+        }
+        const childIframes = element.getElementsByTagName('Iframe');
+        for( let i =0; i< childIframes.length ; i++) {
+          const iframe = childIframes[i] as HTMLIFrameElement;
+          this.modifyIframeIfPowerApps(iframe, eventId);
+        }
+      }
+    }
+  }
+  });
+
+     observer.observe(document.body, {
+      childList : true,
+      subtree: true
+     });
+
+     setTimeout(() => {
+      observer.disconnect();
+      Log.info(LOG_SOURCE, `Stopped observing for new iframes`);
+     },10000);
+     }
+  
+     private modifyIframeIfPowerApps(iframe: HTMLIFrameElement,eventId: string): void{
+      const src:string =iframe.src ||'';
+     if (src.includes('powerapps.com')&& !src.includes('eventid=')){
+        const separator = src.includes('?')? '&' : '?';
+        iframe.src = `${src}${separator}eventID=${encodeURIComponent(eventId)}`;
+        console.log('[kaizenEventId] Injecting eventid into Power Apps');
+     }}}
