@@ -1,0 +1,695 @@
+------components/NavigationRenderer.ts-----
+
+import { INavigationItem } from '../models/INavigationItem';
+
+export interface INavigationRendererOptions {
+  autoExpandWidth: boolean;
+  baseMaxWidth: number;
+  expandedExtra: number;
+}
+
+export class NavigationRenderer {
+
+  private _container: HTMLElement;
+  private _tree: INavigationItem[] = [];
+  private _autoExpandWidth: boolean;
+  private _baseMaxWidth: number;
+  private _expandedExtra: number;
+
+  constructor(container: HTMLElement, options: INavigationRendererOptions) {
+    this._container = container;
+    this._autoExpandWidth = options.autoExpandWidth;
+    this._baseMaxWidth = options.baseMaxWidth;
+    this._expandedExtra = options.expandedExtra;
+  }
+
+  // ══════════════════════════════════════ MAIN RENDER ══════════════════════════════════════
+
+  public render(tree: INavigationItem[]): void {
+    this._tree = tree;
+    this._container.innerHTML = '';
+
+    const grid: HTMLElement = document.createElement('div');
+    grid.className = 'iconNav-grid';
+
+    tree.forEach((item: INavigationItem) => {
+      grid.appendChild(this._createIconTile(item));
+    });
+
+    this._container.appendChild(grid);
+
+    const submenuArea: HTMLElement = document.createElement('div');
+    submenuArea.className = 'iconNav-submenuArea';
+    submenuArea.id = 'iconNav-submenuArea';
+    this._container.appendChild(submenuArea);
+  }
+
+  // ══════════════════════════════════════ ICON TILE ══════════════════════════════════════
+
+  private _createIconTile(item: INavigationItem): HTMLElement {
+    const tile: HTMLElement = document.createElement('div');
+    tile.className = 'iconNav-tile';
+    tile.setAttribute('data-id', item.Id.toString());
+    tile.title = item.Description || item.Title;
+
+    if (item.IconUrl) {
+      const img: HTMLImageElement = document.createElement('img');
+      img.src = item.IconUrl;
+      img.alt = item.Title;
+      img.className = 'iconNav-tileImg';
+      img.onerror = (): void => {
+        img.style.display = 'none';
+        const fb: HTMLElement = document.createElement('div');
+        fb.className = 'iconNav-tileFallback';
+        fb.textContent = item.Title.charAt(0);
+        tile.insertBefore(fb, tile.firstChild);
+      };
+      tile.appendChild(img);
+    } else {
+      const fb: HTMLElement = document.createElement('div');
+      fb.className = 'iconNav-tileFallback';
+      fb.textContent = item.Title.charAt(0);
+      tile.appendChild(fb);
+    }
+
+    const label: HTMLElement = document.createElement('span');
+    label.className = 'iconNav-tileLabel';
+    label.textContent = item.Title;
+    tile.appendChild(label);
+
+    tile.addEventListener('click', () => {
+      this._onTopLevelClick(item, tile);
+    });
+
+    return tile;
+  }
+
+  // ══════════════════════════════════════ TOP-LEVEL CLICK ══════════════════════════════════
+
+  private _onTopLevelClick(item: INavigationItem, tileEl: HTMLElement): void {
+    const submenuArea: HTMLElement = document.getElementById('iconNav-submenuArea') as HTMLElement;
+    const wrapper: HTMLElement | null = document.getElementById('iconNav-wrapper');
+
+    // Already expanded → collapse
+    if (item.isExpanded) {
+      item.isExpanded = false;
+      tileEl.classList.remove('iconNav-tileActive');
+      submenuArea.innerHTML = '';
+      submenuArea.style.display = 'none';
+      this._setWrapperWidth(wrapper, false);
+      return;
+    }
+
+    // Collapse any other open tiles
+    this._tree.forEach((i: INavigationItem) => { i.isExpanded = false; });
+    document.querySelectorAll('.iconNav-tileActive')
+      .forEach((el: Element) => { el.classList.remove('iconNav-tileActive'); });
+
+    // If this item has no children, just navigate (link items at top level) and don't expand width
+    if (item.children.length === 0) {
+      if (item.LinkUrl && item.LinkUrl.trim() !== '') {
+        if (item.OpenInNewTab) {
+          window.open(item.LinkUrl, '_blank');
+        } else {
+          window.location.href = item.LinkUrl;
+        }
+        return;
+      }
+    }
+
+    // Expand
+    item.isExpanded = true;
+    tileEl.classList.add('iconNav-tileActive');
+
+    submenuArea.innerHTML = '';
+    submenuArea.style.display = 'block';
+
+    if (item.children.length > 0) {
+      // Grow the web part width if enabled
+      this._setWrapperWidth(wrapper, true);
+
+      const header: HTMLElement = document.createElement('div');
+      header.className = 'iconNav-submenuHeader';
+      header.textContent = item.Title;
+      submenuArea.appendChild(header);
+
+      submenuArea.appendChild(this._createSubmenuList(item.children, 1));
+    } else {
+      const empty: HTMLElement = document.createElement('div');
+      empty.className = 'iconNav-empty';
+      empty.textContent = 'No sub-items configured.';
+      submenuArea.appendChild(empty);
+    }
+  }
+
+  // ══════════════════════════════════════ DYNAMIC WIDTH ════════════════════════════════════
+
+  private _setWrapperWidth(wrapper: HTMLElement | null, expanded: boolean): void {
+    if (!wrapper || !this._autoExpandWidth) { return; }
+    const target: number = expanded
+      ? this._baseMaxWidth + this._expandedExtra
+      : this._baseMaxWidth;
+    wrapper.style.maxWidth = target + 'px';
+  }
+
+  // ══════════════════════════════════════ SUB-MENU (tile style) ════════════════════════════
+
+  private _createSubmenuList(items: INavigationItem[], level: number): HTMLElement {
+    const container: HTMLElement = document.createElement('div');
+    container.className = 'iconNav-subGrid';
+
+    items.forEach((item: INavigationItem) => {
+      const hasChildren: boolean = (item.children || []).length > 0;
+      const hasLink: boolean = item.LinkUrl.trim() !== '';
+
+      const tile: HTMLElement = document.createElement('div');
+      tile.className = 'iconNav-subTile';
+      tile.title = item.Description || item.Title;
+
+      if (item.IconUrl) {
+        const img: HTMLImageElement = document.createElement('img');
+        img.src = item.IconUrl;
+        img.alt = item.Title;
+        img.className = 'iconNav-subTileImg';
+        img.onerror = (): void => {
+          img.style.display = 'none';
+          const fb: HTMLElement = document.createElement('div');
+          fb.className = 'iconNav-subTileFallback';
+          fb.textContent = item.Title.charAt(0);
+          tile.insertBefore(fb, tile.firstChild);
+        };
+        tile.appendChild(img);
+      } else {
+        const fb: HTMLElement = document.createElement('div');
+        fb.className = 'iconNav-subTileFallback';
+        fb.textContent = item.Title.charAt(0);
+        tile.appendChild(fb);
+      }
+
+      const label: HTMLElement = document.createElement('span');
+      label.className = 'iconNav-subTileLabel';
+      label.textContent = item.Title;
+      tile.appendChild(label);
+
+      const childWrap: HTMLElement = document.createElement('div');
+      childWrap.className = 'iconNav-childWrap';
+      childWrap.style.display = 'none';
+
+      if (hasLink && !hasChildren) {
+        tile.addEventListener('click', () => {
+          if (item.OpenInNewTab) {
+            window.open(item.LinkUrl, '_blank');
+          } else {
+            window.location.href = item.LinkUrl;
+          }
+        });
+      } else if (hasChildren) {
+        const chevron: HTMLElement = document.createElement('span');
+        chevron.className = 'iconNav-subChevron';
+        chevron.innerHTML = '&#9660;';
+        tile.appendChild(chevron);
+
+        childWrap.appendChild(this._createSubmenuList(item.children, level + 1));
+
+        tile.addEventListener('click', (e: Event) => {
+          e.stopPropagation();
+          const isOpen: boolean = childWrap.style.display !== 'none';
+          childWrap.style.display = isOpen ? 'none' : 'block';
+          chevron.classList.toggle('iconNav-subChevronOpen');
+          tile.classList.toggle('iconNav-subTileActive');
+        });
+      }
+
+      const wrapper: HTMLElement = document.createElement('div');
+      wrapper.className = 'iconNav-subTileWrapper';
+      wrapper.appendChild(tile);
+      wrapper.appendChild(childWrap);
+      container.appendChild(wrapper);
+    });
+
+    return container;
+  }
+
+  // ══════════════════════════════════════ LOADING / ERROR ══════════════════════════════════
+
+  public renderLoading(): void {
+    this._container.innerHTML = '<div class="iconNav-loading">Loading navigation...</div>';
+  }
+
+  public renderError(msg: string): void {
+    this._container.innerHTML =
+      '<div class="iconNav-error">'
+      + '<span>⚠ ' + msg + '</span>'
+      + '<button id="iconNav-retry" class="iconNav-retryBtn">Retry</button>'
+      + '</div>';
+  }
+}
+
+
+
+
+
+----css ----
+export class IconNavigationStyles {
+
+  public static inject(): void {
+    if (document.getElementById('iconNav-styles')) { return; }
+
+    const style: HTMLStyleElement = document.createElement('style');
+    style.id = 'iconNav-styles';
+    style.textContent = `
+
+      /* === WRAPPER (size-driving variables live here) === */
+
+      .iconNav-wrapper {
+        --iconNav-maxWidth: 1200px;
+        --iconNav-tileSize: 140px;
+        --iconNav-tileIconSize: 64px;
+        --iconNav-subTileSize: 120px;
+        --iconNav-subIconSize: 48px;
+        max-width: var(--iconNav-maxWidth);
+        transition: max-width 0.3s ease;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      .iconNav-mainTitle {
+        font-size: 20px;
+        font-weight: 700;
+        color: #2c3e50;
+        padding: 20px 20px 0;
+      }
+
+      .iconNav-mainSubtitle {
+        font-size: 13px;
+        color: #7f8c8d;
+        padding: 4px 20px 10px;
+      }
+
+      /* === ICON GRID === */
+
+      .iconNav-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        padding: 20px;
+        justify-content: flex-start;
+      }
+
+      .iconNav-tile {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: var(--iconNav-tileSize);
+        height: var(--iconNav-tileSize);
+        border: 2px solid #c9a227;
+        border-radius: 6px;
+        background: #ffffff;
+        cursor: pointer;
+        padding: 12px;
+        text-align: center;
+        transition: all 0.2s ease;
+        box-sizing: border-box;
+      }
+
+      .iconNav-tile:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        border-color: #1a5276;
+      }
+
+      .iconNav-tileActive {
+        border-color: #2e86c1 !important;
+        background: #eaf2f8 !important;
+        box-shadow: 0 4px 12px rgba(46, 134, 193, 0.3);
+      }
+
+      .iconNav-tileImg {
+        width: var(--iconNav-tileIconSize);
+        height: var(--iconNav-tileIconSize);
+        object-fit: contain;
+        margin-bottom: 8px;
+      }
+
+      .iconNav-tileFallback {
+        width: var(--iconNav-tileIconSize);
+        height: var(--iconNav-tileIconSize);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 28px;
+        font-weight: bold;
+        color: #1a5276;
+        background: #eaf2f8;
+        border-radius: 50%;
+        margin-bottom: 8px;
+      }
+
+      .iconNav-tileLabel {
+        font-size: 12px;
+        font-weight: 600;
+        color: #2c3e50;
+        line-height: 1.3;
+        max-width: calc(var(--iconNav-tileSize) - 20px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      /* === SUBMENU AREA === */
+
+      .iconNav-submenuArea {
+        display: none;
+        margin: 10px 20px 20px;
+        background: #ffffff;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        animation: iconNav-slideDown 0.25s ease;
+      }
+
+      @keyframes iconNav-slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      .iconNav-submenuHeader {
+        font-size: 18px;
+        font-weight: 700;
+        color: #1a5276;
+        margin-bottom: 16px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid #c9a227;
+      }
+
+      /* === SUB-ITEM TILES === */
+
+      .iconNav-subGrid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 10px 0;
+      }
+
+      .iconNav-subTileWrapper {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .iconNav-subTile {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: var(--iconNav-subTileSize);
+        height: var(--iconNav-subTileSize);
+        border: 2px solid #c9a227;
+        border-radius: 6px;
+        background: #ffffff;
+        cursor: pointer;
+        padding: 10px;
+        text-align: center;
+        transition: all 0.2s ease;
+        box-sizing: border-box;
+        position: relative;
+      }
+
+      .iconNav-subTile:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+        border-color: #1a5276;
+      }
+
+      .iconNav-subTileActive {
+        border-color: #2e86c1 !important;
+        background: #eaf2f8 !important;
+      }
+
+      .iconNav-subTileImg {
+        width: var(--iconNav-subIconSize);
+        height: var(--iconNav-subIconSize);
+        object-fit: contain;
+        margin-bottom: 6px;
+      }
+
+      .iconNav-subTileFallback {
+        width: var(--iconNav-subIconSize);
+        height: var(--iconNav-subIconSize);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 22px;
+        font-weight: bold;
+        color: #1a5276;
+        background: #eaf2f8;
+        border-radius: 50%;
+        margin-bottom: 6px;
+      }
+
+      .iconNav-subTileLabel {
+        font-size: 11px;
+        font-weight: 600;
+        color: #2c3e50;
+        line-height: 1.2;
+        max-width: calc(var(--iconNav-subTileSize) - 16px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      .iconNav-subChevron {
+        font-size: 8px;
+        color: #7f8c8d;
+        position: absolute;
+        bottom: 4px;
+        right: 4px;
+        transition: transform 0.2s;
+      }
+
+      .iconNav-subChevronOpen {
+        transform: rotate(180deg);
+      }
+
+      .iconNav-childWrap {
+        padding-left: 0;
+        margin-top: 8px;
+        margin-left: 0;
+      }
+
+      /* === LOADING / ERROR === */
+
+      .iconNav-loading {
+        padding: 40px;
+        text-align: center;
+        color: #7f8c8d;
+        font-size: 14px;
+      }
+
+      .iconNav-error {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 30px;
+        background: #fdf2f2;
+        border: 1px solid #e74c3c;
+        border-radius: 6px;
+        margin: 20px;
+        font-size: 14px;
+      }
+
+      .iconNav-retryBtn {
+        padding: 6px 16px;
+        background: #2e86c1;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .iconNav-retryBtn:hover {
+        background: #1a5276;
+      }
+
+      .iconNav-empty {
+        padding: 20px;
+        color: #7f8c8d;
+        font-style: italic;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+}
+
+
+
+
+
+---------------ts----------------
+import { Version } from '@microsoft/sp-core-library';
+import {
+  type IPropertyPaneConfiguration,
+  PropertyPaneTextField,
+  PropertyPaneSlider,
+  PropertyPaneToggle
+} from '@microsoft/sp-property-pane';
+import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
+
+import { NavigationService } from './services/NavigationService';
+import { NavigationRenderer } from './components/NavigationRenderer';
+import { IconNavigationStyles } from './IconNavigationStyles';
+import { INavigationItem } from './models/INavigationItem';
+
+export interface IIconNavigationWebPartProps {
+  listName: string;
+  sectionTitle: string;
+  sectionSubtitle: string;
+  webPartMaxWidth: number;
+  tileSize: number;
+  subTileSize: number;
+  autoExpandWidth: boolean;
+  expandedExtraWidth: number;
+}
+
+export default class IconNavigationWebPart extends BaseClientSideWebPart<IIconNavigationWebPartProps> {
+
+  private _renderer!: NavigationRenderer;
+  private _service!: NavigationService;
+
+  public render(): void {
+    IconNavigationStyles.inject();
+
+    const title: string = this.properties.sectionTitle || '';
+    const subtitle: string = this.properties.sectionSubtitle || '';
+
+    // Sizing properties with sensible defaults
+    const maxWidth: number     = this.properties.webPartMaxWidth    || 1200;
+    const tileSize: number     = this.properties.tileSize           || 140;
+    const subTileSize: number  = this.properties.subTileSize        || 120;
+    const autoExpand: boolean  = this.properties.autoExpandWidth !== false;
+    const expandedExtra: number = this.properties.expandedExtraWidth || 200;
+
+    // CSS variables drive all sizing — set them on the wrapper
+    const wrapperStyle: string =
+      `--iconNav-maxWidth:${maxWidth}px;` +
+      `--iconNav-tileSize:${tileSize}px;` +
+      `--iconNav-tileIconSize:${Math.round(tileSize * 0.46)}px;` +
+      `--iconNav-subTileSize:${subTileSize}px;` +
+      `--iconNav-subIconSize:${Math.round(subTileSize * 0.4)}px;` +
+      `max-width:${maxWidth}px;`;
+
+    this.domElement.innerHTML =
+      '<div class="iconNav-wrapper" id="iconNav-wrapper" style="' + wrapperStyle + '">'
+      + (title ? '<div class="iconNav-mainTitle">' + this._escapeHtml(title) + '</div>' : '')
+      + (subtitle ? '<div class="iconNav-mainSubtitle">' + this._escapeHtml(subtitle) + '</div>' : '')
+      + '<div id="iconNav-container"></div>'
+      + '</div>';
+
+    const container: HTMLElement = this.domElement.querySelector('#iconNav-container') as HTMLElement;
+
+    this._renderer = new NavigationRenderer(container, {
+      autoExpandWidth: autoExpand,
+      baseMaxWidth: maxWidth,
+      expandedExtra: expandedExtra
+    });
+
+    this._service = new NavigationService(
+      this.context.spHttpClient,
+      this.context.pageContext.web.absoluteUrl,
+      this.properties.listName || 'NavigationConfig'
+    );
+
+    this._loadNavigation();
+  }
+
+  private _loadNavigation(): void {
+    this._renderer.renderLoading();
+
+    this._service.getNavigationItems()
+      .then((items: INavigationItem[]) => {
+        const tree: INavigationItem[] = this._service.buildTree(items);
+        this._renderer.render(tree);
+      })
+      .catch((error: Error) => {
+        console.error('IconNavigation Error:', error);
+        this._renderer.renderError('Failed to load navigation. Check list name and permissions.');
+
+        const retryBtn: HTMLElement | null = document.getElementById('iconNav-retry');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', () => { this._loadNavigation(); });
+        }
+      });
+  }
+
+  private _escapeHtml(text: string): string {
+    const div: HTMLElement = document.createElement('div');
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+  }
+
+  protected get dataVersion(): Version {
+    return Version.parse('1.0');
+  }
+
+  protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
+    return {
+      pages: [{
+        header: { description: 'Configure the Icon Navigation web part' },
+        groups: [
+          {
+            groupName: 'Data Source',
+            groupFields: [
+              PropertyPaneTextField('listName', {
+                label: 'List Name',
+                description: 'The exact name of your SharePoint list'
+              })
+            ]
+          },
+          {
+            groupName: 'Text',
+            groupFields: [
+              PropertyPaneTextField('sectionTitle',    { label: 'Section Title' }),
+              PropertyPaneTextField('sectionSubtitle', { label: 'Section Subtitle' })
+            ]
+          },
+          {
+            groupName: 'Sizing',
+            groupFields: [
+              PropertyPaneSlider('webPartMaxWidth', {
+                label: 'Web Part Width (px)',
+                min: 400, max: 2400, step: 20, value: 1200, showValue: true
+              }),
+              PropertyPaneSlider('tileSize', {
+                label: 'Icon Tile Size (px)',
+                min: 80, max: 240, step: 10, value: 140, showValue: true
+              }),
+              PropertyPaneSlider('subTileSize', {
+                label: 'Sub-Item Tile Size (px)',
+                min: 80, max: 200, step: 10, value: 120, showValue: true
+              })
+            ]
+          },
+          {
+            groupName: 'Expand Behavior',
+            groupFields: [
+              PropertyPaneToggle('autoExpandWidth', {
+                label: 'Grow width when submenu opens',
+                onText: 'Yes', offText: 'No'
+              }),
+              PropertyPaneSlider('expandedExtraWidth', {
+                label: 'Extra width when expanded (px)',
+                min: 0, max: 800, step: 20, value: 200, showValue: true
+              })
+            ]
+          }
+        ]
+      }]
+    };
+  }
+}
