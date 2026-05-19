@@ -1,0 +1,900 @@
+---------------------IconNavigationWebPart.ts--------------
+
+import { Version } from '@microsoft/sp-core-library';
+import {
+  type IPropertyPaneConfiguration,
+  PropertyPaneTextField,
+  PropertyPaneSlider,
+  PropertyPaneToggle,
+  PropertyPaneLabel
+} from '@microsoft/sp-property-pane';
+import { BaseClientSideWebPart } from '@microsoft/sp-webpart-base';
+
+import { NavigationService } from './services/NavigationService';
+import { NavigationRenderer } from './components/NavigationRenderer';
+import { IconNavigationStyles } from './IconNavigationStyles';
+import { INavigationItem } from './models/INavigationItem';
+
+export interface IIconNavigationWebPartProps {
+  // Data source
+  listName: string;
+
+  // Text content
+  sectionTitle: string;
+  sectionSubtitle: string;
+
+  // Layout & Sizing
+  webPartMaxWidth: number;
+  tileSize: number;
+  tileIconSize: number;
+  subTileSize: number;
+  subTileIconSize: number;
+
+  // Typography
+  tileLabelFontSize: number;
+  subTileLabelFontSize: number;
+  textColor: string;
+
+  // Colors & Borders
+  tileBorderColor: string;
+  iconBorderColor: string;
+  iconBorderWidth: number;
+
+  // Expand behavior
+  autoExpandWidth: boolean;
+  expandedExtraWidth: number;
+}
+
+export default class IconNavigationWebPart extends BaseClientSideWebPart<IIconNavigationWebPartProps> {
+
+  private _renderer!: NavigationRenderer;
+  private _service!: NavigationService;
+
+  public render(): void {
+    IconNavigationStyles.inject();
+
+    const title: string = this.properties.sectionTitle || '';
+    const subtitle: string = this.properties.sectionSubtitle || '';
+
+    // Sizing
+    const maxWidth: number         = this.properties.webPartMaxWidth     || 1200;
+    const tileSize: number         = this.properties.tileSize            || 140;
+    const tileIconSize: number     = this.properties.tileIconSize        || 64;
+    const subTileSize: number      = this.properties.subTileSize         || 120;
+    const subTileIconSize: number  = this.properties.subTileIconSize     || 48;
+
+    // Typography
+    const labelFontSize: number    = this.properties.tileLabelFontSize    || 12;
+    const subLabelFontSize: number = this.properties.subTileLabelFontSize || 11;
+    const textColor: string        = this.properties.textColor            || '#2c3e50';
+
+    // Colors & Borders
+    const tileBorderColor: string  = this.properties.tileBorderColor      || '#c9a227';
+    const iconBorderColor: string  = this.properties.iconBorderColor      || 'transparent';
+    const iconBorderWidth: number  = this.properties.iconBorderWidth != null
+                                        ? this.properties.iconBorderWidth
+                                        : 0;
+
+    // Expand
+    const autoExpand: boolean      = this.properties.autoExpandWidth !== false;
+    const expandedExtra: number    = this.properties.expandedExtraWidth   || 200;
+
+    // CSS variables drive all sizing/colors — set them on the wrapper
+    const wrapperStyle: string =
+      `--iconNav-maxWidth:${maxWidth}px;` +
+      `--iconNav-tileSize:${tileSize}px;` +
+      `--iconNav-tileIconSize:${tileIconSize}px;` +
+      `--iconNav-subTileSize:${subTileSize}px;` +
+      `--iconNav-subIconSize:${subTileIconSize}px;` +
+      `--iconNav-tileLabelFontSize:${labelFontSize}px;` +
+      `--iconNav-subTileLabelFontSize:${subLabelFontSize}px;` +
+      `--iconNav-textColor:${textColor};` +
+      `--iconNav-borderColor:${tileBorderColor};` +
+      `--iconNav-iconBorderColor:${iconBorderColor};` +
+      `--iconNav-iconBorderWidth:${iconBorderWidth}px;` +
+      `max-width:${maxWidth}px;`;
+
+    this.domElement.innerHTML =
+      '<div class="iconNav-wrapper" id="iconNav-wrapper" style="' + wrapperStyle + '">'
+      + (title ? '<div class="iconNav-mainTitle">' + this._escapeHtml(title) + '</div>' : '')
+      + (subtitle ? '<div class="iconNav-mainSubtitle">' + this._escapeHtml(subtitle) + '</div>' : '')
+      + '<div id="iconNav-container"></div>'
+      + '</div>';
+
+    const container: HTMLElement = this.domElement.querySelector('#iconNav-container') as HTMLElement;
+
+    this._renderer = new NavigationRenderer(container, {
+      autoExpandWidth: autoExpand,
+      baseMaxWidth: maxWidth,
+      expandedExtra: expandedExtra
+    });
+
+    this._service = new NavigationService(
+      this.context.spHttpClient,
+      this.context.pageContext.web.absoluteUrl,
+      this.properties.listName || 'NavigationConfig'
+    );
+
+    this._loadNavigation();
+  }
+
+  private _loadNavigation(): void {
+    this._renderer.renderLoading();
+
+    this._service.getNavigationItems()
+      .then((items: INavigationItem[]) => {
+        const tree: INavigationItem[] = this._service.buildTree(items);
+        this._renderer.render(tree);
+      })
+      .catch((error: Error) => {
+        console.error('IconNavigation Error:', error);
+        this._renderer.renderError('Failed to load navigation. Check list name and permissions.');
+
+        const retryBtn: HTMLElement | null = document.getElementById('iconNav-retry');
+        if (retryBtn) {
+          retryBtn.addEventListener('click', () => { this._loadNavigation(); });
+        }
+      });
+  }
+
+  private _escapeHtml(text: string): string {
+    const div: HTMLElement = document.createElement('div');
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+  }
+
+  protected get dataVersion(): Version {
+    return Version.parse('1.0');
+  }
+
+  protected getPropertyPaneConfiguration(): IPropertyPaneConfiguration {
+    return {
+      pages: [{
+        header: { description: 'Configure the Icon Navigation web part' },
+        groups: [
+
+          // ───────── 1. DATA SOURCE ─────────
+          {
+            groupName: '1. Data Source',
+            groupFields: [
+              PropertyPaneTextField('listName', {
+                label: 'List Name',
+                description: 'Exact name of your SharePoint list (e.g. NavigationConfig)'
+              })
+            ]
+          },
+
+          // ───────── 2. TEXT CONTENT ─────────
+          {
+            groupName: '2. Text Content',
+            groupFields: [
+              PropertyPaneTextField('sectionTitle',    { label: 'Section Title' }),
+              PropertyPaneTextField('sectionSubtitle', { label: 'Section Subtitle' })
+            ]
+          },
+
+          // ───────── 3. LAYOUT & SIZING ─────────
+          {
+            groupName: '3. Layout & Sizing',
+            groupFields: [
+              PropertyPaneSlider('webPartMaxWidth', {
+                label: 'Web Part Max Width (px)',
+                min: 400, max: 2400, step: 20, value: 1200, showValue: true
+              }),
+              PropertyPaneSlider('tileSize', {
+                label: 'Icon Tile Size (px)',
+                min: 80, max: 280, step: 10, value: 140, showValue: true
+              }),
+              PropertyPaneSlider('tileIconSize', {
+                label: 'Icon Image Size (px)',
+                min: 24, max: 200, step: 4, value: 64, showValue: true
+              }),
+              PropertyPaneSlider('subTileSize', {
+                label: 'Sub-Item Tile Size (px)',
+                min: 70, max: 240, step: 10, value: 120, showValue: true
+              }),
+              PropertyPaneSlider('subTileIconSize', {
+                label: 'Sub-Item Icon Image Size (px)',
+                min: 16, max: 160, step: 4, value: 48, showValue: true
+              })
+            ]
+          },
+
+          // ───────── 4. TYPOGRAPHY ─────────
+          {
+            groupName: '4. Typography',
+            groupFields: [
+              PropertyPaneSlider('tileLabelFontSize', {
+                label: 'Tile Label Font Size (px)',
+                min: 8, max: 28, step: 1, value: 12, showValue: true
+              }),
+              PropertyPaneSlider('subTileLabelFontSize', {
+                label: 'Sub-Tile Label Font Size (px)',
+                min: 8, max: 24, step: 1, value: 11, showValue: true
+              }),
+              PropertyPaneTextField('textColor', {
+                label: 'Text / Label Color',
+                description: 'Hex color, e.g. #2c3e50'
+              })
+            ]
+          },
+
+          // ───────── 5. COLORS & BORDERS ─────────
+          {
+            groupName: '5. Colors & Borders',
+            groupFields: [
+              PropertyPaneTextField('tileBorderColor', {
+                label: 'Tile Border Color',
+                description: 'Hex color, e.g. #c9a227'
+              }),
+              PropertyPaneTextField('iconBorderColor', {
+                label: 'Icon (Image) Border Color',
+                description: 'Hex color, e.g. #1a5276 (set width > 0 to show)'
+              }),
+              PropertyPaneSlider('iconBorderWidth', {
+                label: 'Icon (Image) Border Width (px)',
+                min: 0, max: 8, step: 1, value: 0, showValue: true
+              }),
+              PropertyPaneLabel('', {
+                text: 'Tip: leave Icon Border Width at 0 to hide the image border.'
+              })
+            ]
+          },
+
+          // ───────── 6. EXPAND BEHAVIOR ─────────
+          {
+            groupName: '6. Expand Behavior',
+            groupFields: [
+              PropertyPaneToggle('autoExpandWidth', {
+                label: 'Grow width when submenu opens',
+                onText: 'Yes', offText: 'No'
+              }),
+              PropertyPaneSlider('expandedExtraWidth', {
+                label: 'Extra width when expanded (px)',
+                min: 0, max: 800, step: 20, value: 200, showValue: true
+              })
+            ]
+          }
+        ]
+      }]
+    };
+  }
+}
+
+--------------------NavigationRenderer.ts------------------
+
+import { INavigationItem } from '../models/INavigationItem';
+
+export interface INavigationRendererOptions {
+  autoExpandWidth: boolean;
+  baseMaxWidth: number;
+  expandedExtra: number;
+}
+
+export class NavigationRenderer {
+
+  private _container: HTMLElement;
+  private _tree: INavigationItem[] = [];
+  private _autoExpandWidth: boolean;
+  private _baseMaxWidth: number;
+  private _expandedExtra: number;
+
+  constructor(container: HTMLElement, options: INavigationRendererOptions) {
+    this._container = container;
+    this._autoExpandWidth = options.autoExpandWidth;
+    this._baseMaxWidth = options.baseMaxWidth;
+    this._expandedExtra = options.expandedExtra;
+  }
+
+  // ══════════════════════════════════════ MAIN RENDER ══════════════════════════════════════
+
+  public render(tree: INavigationItem[]): void {
+    this._tree = tree;
+    this._container.innerHTML = '';
+
+    const grid: HTMLElement = document.createElement('div');
+    grid.className = 'iconNav-grid';
+
+    tree.forEach((item: INavigationItem) => {
+      grid.appendChild(this._createIconTile(item));
+    });
+
+    this._container.appendChild(grid);
+
+    const submenuArea: HTMLElement = document.createElement('div');
+    submenuArea.className = 'iconNav-submenuArea';
+    submenuArea.id = 'iconNav-submenuArea';
+    this._container.appendChild(submenuArea);
+  }
+
+  // ══════════════════════════════════════ ICON TILE ══════════════════════════════════════
+
+  private _createIconTile(item: INavigationItem): HTMLElement {
+    const tile: HTMLElement = document.createElement('div');
+    tile.className = 'iconNav-tile';
+    tile.setAttribute('data-id', item.Id.toString());
+    tile.title = item.Description || item.Title;
+
+    if (item.IconUrl) {
+      const img: HTMLImageElement = document.createElement('img');
+      img.src = item.IconUrl;
+      img.alt = item.Title;
+      img.className = 'iconNav-tileImg';
+      img.onerror = (): void => {
+        img.style.display = 'none';
+        const fb: HTMLElement = document.createElement('div');
+        fb.className = 'iconNav-tileFallback';
+        fb.textContent = item.Title.charAt(0);
+        tile.insertBefore(fb, tile.firstChild);
+      };
+      tile.appendChild(img);
+    } else {
+      const fb: HTMLElement = document.createElement('div');
+      fb.className = 'iconNav-tileFallback';
+      fb.textContent = item.Title.charAt(0);
+      tile.appendChild(fb);
+    }
+
+    const label: HTMLElement = document.createElement('span');
+    label.className = 'iconNav-tileLabel';
+    label.textContent = item.Title;
+    tile.appendChild(label);
+
+    tile.addEventListener('click', () => {
+      this._onTopLevelClick(item, tile);
+    });
+
+    return tile;
+  }
+
+  // ══════════════════════════════════════ TOP-LEVEL CLICK ══════════════════════════════════
+
+  private _onTopLevelClick(item: INavigationItem, tileEl: HTMLElement): void {
+    const submenuArea: HTMLElement = document.getElementById('iconNav-submenuArea') as HTMLElement;
+    const wrapper: HTMLElement | null = document.getElementById('iconNav-wrapper');
+
+    // Already expanded → collapse
+    if (item.isExpanded) {
+      item.isExpanded = false;
+      tileEl.classList.remove('iconNav-tileActive');
+      submenuArea.innerHTML = '';
+      submenuArea.style.display = 'none';
+      this._setWrapperWidth(wrapper, false);
+      return;
+    }
+
+    // Collapse any other open tiles
+    this._tree.forEach((i: INavigationItem) => { i.isExpanded = false; });
+    document.querySelectorAll('.iconNav-tileActive')
+      .forEach((el: Element) => { el.classList.remove('iconNav-tileActive'); });
+
+    // No children → just navigate, don't expand width
+    if (item.children.length === 0) {
+      if (item.LinkUrl && item.LinkUrl.trim() !== '') {
+        if (item.OpenInNewTab) {
+          window.open(item.LinkUrl, '_blank');
+        } else {
+          window.location.href = item.LinkUrl;
+        }
+        return;
+      }
+    }
+
+    // Expand
+    item.isExpanded = true;
+    tileEl.classList.add('iconNav-tileActive');
+
+    submenuArea.innerHTML = '';
+    submenuArea.style.display = 'block';
+
+    if (item.children.length > 0) {
+      this._setWrapperWidth(wrapper, true);
+
+      const header: HTMLElement = document.createElement('div');
+      header.className = 'iconNav-submenuHeader';
+      header.textContent = item.Title;
+      submenuArea.appendChild(header);
+
+      submenuArea.appendChild(this._createSubmenuList(item.children, 1));
+    } else {
+      const empty: HTMLElement = document.createElement('div');
+      empty.className = 'iconNav-empty';
+      empty.textContent = 'No sub-items configured.';
+      submenuArea.appendChild(empty);
+    }
+
+    // ── Auto-scroll: bring the submenu area into view ──
+    this._scrollSubmenuIntoView(submenuArea);
+  }
+
+  // ══════════════════════════════════════ AUTO-SCROLL ══════════════════════════════════════
+
+  private _scrollSubmenuIntoView(submenuArea: HTMLElement): void {
+    // Wait one frame so the element has dimensions / the slide-down animation has started
+    window.setTimeout(() => {
+      try {
+        const rect: ClientRect = submenuArea.getBoundingClientRect();
+        const viewportHeight: number = window.innerHeight || document.documentElement.clientHeight;
+
+        // Only scroll if the submenu isn't fully visible
+        const fullyVisible: boolean = rect.top >= 0 && rect.bottom <= viewportHeight;
+        if (fullyVisible) { return; }
+
+        // Target: keep ~20px above the submenu for context (so user still sees parent tile edge)
+        const offsetTop: number = (window.pageYOffset || document.documentElement.scrollTop)
+                                  + rect.top - 20;
+
+        // Try smooth scroll on window first
+        if (typeof window.scrollTo === 'function') {
+          window.scrollTo({ top: offsetTop, behavior: 'smooth' });
+        } else {
+          submenuArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      } catch (e) {
+        // Fallback for older browsers
+        submenuArea.scrollIntoView();
+      }
+    }, 80); // 80ms lets the slideDown animation begin so dimensions are accurate
+  }
+
+  // ══════════════════════════════════════ DYNAMIC WIDTH ════════════════════════════════════
+
+  private _setWrapperWidth(wrapper: HTMLElement | null, expanded: boolean): void {
+    if (!wrapper || !this._autoExpandWidth) { return; }
+    const target: number = expanded
+      ? this._baseMaxWidth + this._expandedExtra
+      : this._baseMaxWidth;
+    wrapper.style.maxWidth = target + 'px';
+  }
+
+  // ══════════════════════════════════════ SUB-MENU (tile style) ════════════════════════════
+
+  private _createSubmenuList(items: INavigationItem[], level: number): HTMLElement {
+    const container: HTMLElement = document.createElement('div');
+    container.className = 'iconNav-subGrid';
+
+    items.forEach((item: INavigationItem) => {
+      const hasChildren: boolean = (item.children || []).length > 0;
+      const hasLink: boolean = item.LinkUrl.trim() !== '';
+
+      const tile: HTMLElement = document.createElement('div');
+      tile.className = 'iconNav-subTile';
+      tile.title = item.Description || item.Title;
+
+      if (item.IconUrl) {
+        const img: HTMLImageElement = document.createElement('img');
+        img.src = item.IconUrl;
+        img.alt = item.Title;
+        img.className = 'iconNav-subTileImg';
+        img.onerror = (): void => {
+          img.style.display = 'none';
+          const fb: HTMLElement = document.createElement('div');
+          fb.className = 'iconNav-subTileFallback';
+          fb.textContent = item.Title.charAt(0);
+          tile.insertBefore(fb, tile.firstChild);
+        };
+        tile.appendChild(img);
+      } else {
+        const fb: HTMLElement = document.createElement('div');
+        fb.className = 'iconNav-subTileFallback';
+        fb.textContent = item.Title.charAt(0);
+        tile.appendChild(fb);
+      }
+
+      const label: HTMLElement = document.createElement('span');
+      label.className = 'iconNav-subTileLabel';
+      label.textContent = item.Title;
+      tile.appendChild(label);
+
+      const childWrap: HTMLElement = document.createElement('div');
+      childWrap.className = 'iconNav-childWrap';
+      childWrap.style.display = 'none';
+
+      const wrapper: HTMLElement = document.createElement('div');
+      wrapper.className = 'iconNav-subTileWrapper';
+
+      if (hasLink && !hasChildren) {
+        tile.addEventListener('click', () => {
+          if (item.OpenInNewTab) {
+            window.open(item.LinkUrl, '_blank');
+          } else {
+            window.location.href = item.LinkUrl;
+          }
+        });
+      } else if (hasChildren) {
+        const chevron: HTMLElement = document.createElement('span');
+        chevron.className = 'iconNav-subChevron';
+        chevron.innerHTML = '&#9660;';
+        tile.appendChild(chevron);
+
+        childWrap.appendChild(this._createSubmenuList(item.children, level + 1));
+
+        tile.addEventListener('click', (e: Event) => {
+          e.stopPropagation();
+          const isOpen: boolean = childWrap.style.display !== 'none';
+
+          // Close any sibling that is currently open
+          if (!isOpen && wrapper.parentElement) {
+            const siblings: HTMLCollection = wrapper.parentElement.children;
+            for (let i: number = 0; i < siblings.length; i++) {
+              const sib: Element = siblings[i];
+              if (sib === wrapper) { continue; }
+
+              const sibChild: HTMLElement | null = sib.querySelector(':scope > .iconNav-childWrap');
+              const sibTile: HTMLElement | null  = sib.querySelector(':scope > .iconNav-subTile');
+              const sibChev: HTMLElement | null  = sib.querySelector(':scope > .iconNav-subTile > .iconNav-subChevron');
+
+              if (sibChild && sibChild.style.display !== 'none') {
+                sibChild.style.display = 'none';
+                if (sibTile) { sibTile.classList.remove('iconNav-subTileActive'); }
+                if (sibChev) { sibChev.classList.remove('iconNav-subChevronOpen'); }
+              }
+            }
+          }
+
+          childWrap.style.display = isOpen ? 'none' : 'block';
+          chevron.classList.toggle('iconNav-subChevronOpen');
+          tile.classList.toggle('iconNav-subTileActive');
+        });
+      }
+
+      wrapper.appendChild(tile);
+      wrapper.appendChild(childWrap);
+      container.appendChild(wrapper);
+    });
+
+    return container;
+  }
+
+  // ══════════════════════════════════════ LOADING / ERROR ══════════════════════════════════
+
+  public renderLoading(): void {
+    this._container.innerHTML = '<div class="iconNav-loading">Loading navigation...</div>';
+  }
+
+  public renderError(msg: string): void {
+    this._container.innerHTML =
+      '<div class="iconNav-error">'
+      + '<span>⚠ ' + msg + '</span>'
+      + '<button id="iconNav-retry" class="iconNav-retryBtn">Retry</button>'
+      + '</div>';
+  }
+}
+
+
+
+
+----------------IconNavigationStyles.ts---------------
+
+
+export class IconNavigationStyles {
+
+  public static inject(): void {
+    if (document.getElementById('iconNav-styles')) { return; }
+
+    const style: HTMLStyleElement = document.createElement('style');
+    style.id = 'iconNav-styles';
+    style.textContent = `
+
+      /* === WRAPPER (size + color variables live here) === */
+
+      .iconNav-wrapper {
+        --iconNav-maxWidth: 1200px;
+        --iconNav-tileSize: 140px;
+        --iconNav-tileIconSize: 64px;
+        --iconNav-subTileSize: 120px;
+        --iconNav-subIconSize: 48px;
+
+        --iconNav-tileLabelFontSize: 12px;
+        --iconNav-subTileLabelFontSize: 11px;
+
+        --iconNav-textColor: #2c3e50;
+        --iconNav-borderColor: #c9a227;
+        --iconNav-iconBorderColor: transparent;
+        --iconNav-iconBorderWidth: 0px;
+
+        max-width: var(--iconNav-maxWidth);
+        transition: max-width 0.3s ease;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      .iconNav-mainTitle {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--iconNav-textColor);
+        padding: 20px 20px 0;
+      }
+
+      .iconNav-mainSubtitle {
+        font-size: 13px;
+        color: #7f8c8d;
+        padding: 4px 20px 10px;
+      }
+
+      /* === ICON GRID === */
+
+      .iconNav-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px;
+        padding: 20px;
+        justify-content: flex-start;
+      }
+
+      /* === TOP-LEVEL TILE === */
+
+      .iconNav-tile {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: var(--iconNav-tileSize);
+        height: var(--iconNav-tileSize);
+        border: 2px solid var(--iconNav-borderColor);
+        border-radius: 6px;
+        background: #ffffff;
+        cursor: pointer;
+        padding: 12px;
+        text-align: center;
+        box-sizing: border-box;
+        transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.2s ease, background 0.2s ease;
+        z-index: 1;
+      }
+
+      .iconNav-tile:hover {
+        transform: scale(1.12);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+        border-color: #1a5276;
+        z-index: 10;
+      }
+
+      .iconNav-tileActive {
+        border-color: #2e86c1 !important;
+        background: #eaf2f8 !important;
+        box-shadow: 0 4px 12px rgba(46, 134, 193, 0.3);
+      }
+
+      .iconNav-tileActive:hover {
+        transform: scale(1.12);
+      }
+
+      .iconNav-tileImg {
+        width: var(--iconNav-tileIconSize);
+        height: var(--iconNav-tileIconSize);
+        object-fit: contain;
+        margin-bottom: 8px;
+        border: var(--iconNav-iconBorderWidth) solid var(--iconNav-iconBorderColor);
+        border-radius: 4px;
+        box-sizing: border-box;
+        transition: transform 0.25s ease;
+      }
+
+      .iconNav-tile:hover .iconNav-tileImg {
+        transform: scale(1.1);
+      }
+
+      .iconNav-tileFallback {
+        width: var(--iconNav-tileIconSize);
+        height: var(--iconNav-tileIconSize);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: calc(var(--iconNav-tileIconSize) * 0.45);
+        font-weight: bold;
+        color: #1a5276;
+        background: #eaf2f8;
+        border: var(--iconNav-iconBorderWidth) solid var(--iconNav-iconBorderColor);
+        border-radius: 50%;
+        box-sizing: border-box;
+        margin-bottom: 8px;
+        transition: transform 0.25s ease;
+      }
+
+      .iconNav-tile:hover .iconNav-tileFallback {
+        transform: scale(1.1);
+      }
+
+      .iconNav-tileLabel {
+        font-size: var(--iconNav-tileLabelFontSize);
+        font-weight: 600;
+        color: var(--iconNav-textColor);
+        line-height: 1.3;
+        max-width: calc(var(--iconNav-tileSize) - 20px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      /* === SUBMENU AREA === */
+
+      .iconNav-submenuArea {
+        display: none;
+        margin: 10px 20px 20px;
+        background: #ffffff;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        animation: iconNav-slideDown 0.25s ease;
+      }
+
+      @keyframes iconNav-slideDown {
+        from { opacity: 0; transform: translateY(-10px); }
+        to   { opacity: 1; transform: translateY(0); }
+      }
+
+      .iconNav-submenuHeader {
+        font-size: 18px;
+        font-weight: 700;
+        color: #1a5276;
+        margin-bottom: 16px;
+        padding-bottom: 8px;
+        border-bottom: 2px solid var(--iconNav-borderColor);
+      }
+
+      /* === SUB-ITEM TILES === */
+
+      .iconNav-subGrid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding: 10px 0;
+      }
+
+      .iconNav-subTileWrapper {
+        display: flex;
+        flex-direction: column;
+        position: relative;
+      }
+
+      .iconNav-subTile {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: var(--iconNav-subTileSize);
+        height: var(--iconNav-subTileSize);
+        border: 2px solid var(--iconNav-borderColor);
+        border-radius: 6px;
+        background: #ffffff;
+        cursor: pointer;
+        padding: 10px;
+        text-align: center;
+        box-sizing: border-box;
+        transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.2s ease, background 0.2s ease;
+        z-index: 1;
+      }
+
+      .iconNav-subTile:hover {
+        transform: scale(1.12);
+        box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+        border-color: #1a5276;
+        z-index: 10;
+      }
+
+      .iconNav-subTileActive {
+        border-color: #2e86c1 !important;
+        background: #eaf2f8 !important;
+      }
+
+      .iconNav-subTileActive:hover {
+        transform: scale(1.12);
+      }
+
+      .iconNav-subTileImg {
+        width: var(--iconNav-subIconSize);
+        height: var(--iconNav-subIconSize);
+        object-fit: contain;
+        margin-bottom: 6px;
+        border: var(--iconNav-iconBorderWidth) solid var(--iconNav-iconBorderColor);
+        border-radius: 4px;
+        box-sizing: border-box;
+        transition: transform 0.25s ease;
+      }
+
+      .iconNav-subTile:hover .iconNav-subTileImg {
+        transform: scale(1.1);
+      }
+
+      .iconNav-subTileFallback {
+        width: var(--iconNav-subIconSize);
+        height: var(--iconNav-subIconSize);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: calc(var(--iconNav-subIconSize) * 0.45);
+        font-weight: bold;
+        color: #1a5276;
+        background: #eaf2f8;
+        border: var(--iconNav-iconBorderWidth) solid var(--iconNav-iconBorderColor);
+        border-radius: 50%;
+        box-sizing: border-box;
+        margin-bottom: 6px;
+        transition: transform 0.25s ease;
+      }
+
+      .iconNav-subTile:hover .iconNav-subTileFallback {
+        transform: scale(1.1);
+      }
+
+      .iconNav-subTileLabel {
+        font-size: var(--iconNav-subTileLabelFontSize);
+        font-weight: 600;
+        color: var(--iconNav-textColor);
+        line-height: 1.2;
+        max-width: calc(var(--iconNav-subTileSize) - 16px);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      .iconNav-subChevron {
+        font-size: 8px;
+        color: #7f8c8d;
+        position: absolute;
+        bottom: 4px;
+        right: 4px;
+        transition: transform 0.2s;
+      }
+
+      .iconNav-subChevronOpen {
+        transform: rotate(180deg);
+      }
+
+      .iconNav-childWrap {
+        padding-left: 0;
+        margin-top: 8px;
+        margin-left: 0;
+      }
+
+      /* === LOADING / ERROR === */
+
+      .iconNav-loading {
+        padding: 40px;
+        text-align: center;
+        color: #7f8c8d;
+        font-size: 14px;
+      }
+
+      .iconNav-error {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 30px;
+        background: #fdf2f2;
+        border: 1px solid #e74c3c;
+        border-radius: 6px;
+        margin: 20px;
+        font-size: 14px;
+      }
+
+      .iconNav-retryBtn {
+        padding: 6px 16px;
+        background: #2e86c1;
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+
+      .iconNav-retryBtn:hover {
+        background: #1a5276;
+      }
+
+      .iconNav-empty {
+        padding: 20px;
+        color: #7f8c8d;
+        font-style: italic;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+}
