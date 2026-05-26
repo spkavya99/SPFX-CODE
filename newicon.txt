@@ -905,6 +905,7 @@ export class IconNavigationStyles {
 -----new renderts------------
 
 
+
 import { INavigationItem } from '../models/INavigationItem';
 
 export interface INavigationRendererOptions {
@@ -934,30 +935,35 @@ export class NavigationRenderer {
     this._tree = tree;
     this._container.innerHTML = '';
 
-    // Tile grid: a plain flex-wrap row that NEVER reflows when a tile opens.
+    // Level 0: the top-level tile grid. This never reflows.
     const grid: HTMLElement = document.createElement('div');
     grid.className = 'iconNav-grid';
 
     tree.forEach((item: INavigationItem) => {
-      grid.appendChild(this._createIconTile(item));
+      grid.appendChild(this._createTile(item, 0));
     });
 
     this._container.appendChild(grid);
 
-    // Submenu panel: a full-width block that sits BELOW the whole tile grid.
-    // Kept as a sibling of the grid (not inside it) so it always spans the
-    // full width and never wedges itself between tiles.
-    const submenuArea: HTMLElement = document.createElement('div');
-    submenuArea.className = 'iconNav-submenuArea';
-    submenuArea.id = 'iconNav-submenuArea';
-    this._container.appendChild(submenuArea);
+    // Holder for the stacked drill-down panels (levels 1, 2, 3, ...).
+    // Each opened tile adds its own titled panel here.
+    const levels: HTMLElement = document.createElement('div');
+    levels.className = 'iconNav-levels';
+    levels.id = 'iconNav-levels';
+    this._container.appendChild(levels);
   }
 
-  // ══════════════════════════════════════ ICON TILE ══════════════════════════════════════
+  // ══════════════════════════════════════ TILE (any level) ═════════════════════════════════
 
-  private _createIconTile(item: INavigationItem): HTMLElement {
+  private _createTile(item: INavigationItem, depth: number): HTMLElement {
+    const isTop: boolean = depth === 0;
+
+    const imgClass: string   = isTop ? 'iconNav-tileImg'      : 'iconNav-subTileImg';
+    const fbClass: string    = isTop ? 'iconNav-tileFallback' : 'iconNav-subTileFallback';
+    const labelClass: string = isTop ? 'iconNav-tileLabel'    : 'iconNav-subTileLabel';
+
     const tile: HTMLElement = document.createElement('div');
-    tile.className = 'iconNav-tile';
+    tile.className = isTop ? 'iconNav-tile' : 'iconNav-subTile';
     tile.setAttribute('data-id', item.Id.toString());
     tile.title = item.Description || item.Title;
 
@@ -965,122 +971,157 @@ export class NavigationRenderer {
       const img: HTMLImageElement = document.createElement('img');
       img.src = item.IconUrl;
       img.alt = item.Title;
-      img.className = 'iconNav-tileImg';
+      img.className = imgClass;
       img.onerror = (): void => {
         img.style.display = 'none';
         const fb: HTMLElement = document.createElement('div');
-        fb.className = 'iconNav-tileFallback';
+        fb.className = fbClass;
         fb.textContent = item.Title.charAt(0);
         tile.insertBefore(fb, tile.firstChild);
       };
       tile.appendChild(img);
     } else {
       const fb: HTMLElement = document.createElement('div');
-      fb.className = 'iconNav-tileFallback';
+      fb.className = fbClass;
       fb.textContent = item.Title.charAt(0);
       tile.appendChild(fb);
     }
 
     const label: HTMLElement = document.createElement('span');
-    label.className = 'iconNav-tileLabel';
+    label.className = labelClass;
     label.textContent = item.Title;
     tile.appendChild(label);
 
-    tile.addEventListener('click', () => {
-      this._onTopLevelClick(item, tile);
+    // Expandable tiles get a caret; the caret flips via CSS when the tile is active.
+    if ((item.children || []).length > 0) {
+      const caret: HTMLElement = document.createElement('span');
+      caret.className = 'iconNav-caret';
+      caret.innerHTML = '&#9660;';
+      tile.appendChild(caret);
+    }
+
+    tile.addEventListener('click', (e: Event) => {
+      e.stopPropagation();
+      this._handleTileClick(item, tile, depth);
     });
 
     return tile;
   }
 
-  // ══════════════════════════════════════ TOP-LEVEL CLICK ══════════════════════════════════
+  // ══════════════════════════════════════ CLICK HANDLER ════════════════════════════════════
 
-  private _onTopLevelClick(item: INavigationItem, tileEl: HTMLElement): void {
-    const submenuArea: HTMLElement = document.getElementById('iconNav-submenuArea') as HTMLElement;
+  private _handleTileClick(item: INavigationItem, tileEl: HTMLElement, depth: number): void {
+    const levels: HTMLElement | null = document.getElementById('iconNav-levels');
+    if (!levels) { return; }
     const wrapper: HTMLElement | null = document.getElementById('iconNav-wrapper');
 
-    // Already expanded → collapse
-    if (item.isExpanded) {
-      item.isExpanded = false;
-      tileEl.classList.remove('iconNav-tileActive');
-      submenuArea.innerHTML = '';
-      submenuArea.style.display = 'none';
-      this._setWrapperWidth(wrapper, false);
+    const activeClass: string = depth === 0 ? 'iconNav-tileActive' : 'iconNav-subTileActive';
+    const wasOpen: boolean = tileEl.classList.contains(activeClass);
+
+    // Clear the active state on every tile in the SAME grid (the clicked tile's siblings).
+    const grid: HTMLElement | null = tileEl.parentElement;
+    if (grid) {
+      grid.querySelectorAll('.' + activeClass).forEach((el: Element) => {
+        el.classList.remove(activeClass);
+      });
+    }
+
+    // Remove any panels that are deeper than this tile (depth + 1 and beyond).
+    this._removePanelsFromDepth(levels, depth + 1);
+
+    // Clicking the already-open tile just collapses it (panels already removed above).
+    if (wasOpen) {
+      this._setWrapperWidth(wrapper, levels.children.length > 0);
       return;
     }
 
-    // Collapse any other open tiles
-    this._tree.forEach((i: INavigationItem) => { i.isExpanded = false; });
-    document.querySelectorAll('.iconNav-tileActive')
-      .forEach((el: Element) => { el.classList.remove('iconNav-tileActive'); });
-
-    // No children → just navigate, don't expand
-    if (item.children.length === 0) {
+    // No children → navigate.
+    if (!item.children || item.children.length === 0) {
       if (item.LinkUrl && item.LinkUrl.trim() !== '') {
         if (item.OpenInNewTab) {
           window.open(item.LinkUrl, '_blank');
         } else {
           window.location.href = item.LinkUrl;
         }
-        return;
       }
+      return;
     }
 
-    // Expand
-    item.isExpanded = true;
-    tileEl.classList.add('iconNav-tileActive');
+    // Has children → open a NEW titled panel for them, stacked below.
+    tileEl.classList.add(activeClass);
+    const panel: HTMLElement = this._createLevelPanel(item, depth);
+    levels.appendChild(panel);
 
-    submenuArea.innerHTML = '';
-    submenuArea.style.display = 'block';
+    this._setWrapperWidth(wrapper, true);
+    this._scrollSubmenuIntoView(panel);
+  }
 
-    if (item.children.length > 0) {
-      this._setWrapperWidth(wrapper, true);
+  // ══════════════════════════════════════ LEVEL PANEL ══════════════════════════════════════
 
-      const header: HTMLElement = document.createElement('div');
-      header.className = 'iconNav-submenuHeader';
-      header.textContent = item.Title;
-      submenuArea.appendChild(header);
+  /**
+   * Builds a self-contained, titled panel holding the children of `item`.
+   * The panel is tagged with its depth so deeper panels can be torn down
+   * cleanly when a shallower tile is clicked.
+   */
+  private _createLevelPanel(item: INavigationItem, parentDepth: number): HTMLElement {
+    const depth: number = parentDepth + 1;
 
-      submenuArea.appendChild(this._createSubmenuList(item.children, 1));
-    } else {
-      const empty: HTMLElement = document.createElement('div');
-      empty.className = 'iconNav-empty';
-      empty.textContent = 'No sub-items configured.';
-      submenuArea.appendChild(empty);
+    const panel: HTMLElement = document.createElement('div');
+    panel.className = 'iconNav-submenuArea';
+    panel.setAttribute('data-depth', depth.toString());
+
+    const header: HTMLElement = document.createElement('div');
+    header.className = 'iconNav-submenuHeader';
+    header.textContent = item.Title;
+    panel.appendChild(header);
+
+    const grid: HTMLElement = document.createElement('div');
+    grid.className = 'iconNav-subGrid';
+    (item.children || []).forEach((child: INavigationItem) => {
+      grid.appendChild(this._createTile(child, depth));
+    });
+    panel.appendChild(grid);
+
+    return panel;
+  }
+
+  /** Removes every panel whose depth is >= minDepth. */
+  private _removePanelsFromDepth(levels: HTMLElement, minDepth: number): void {
+    const panels: HTMLElement[] = [];
+    for (let i: number = 0; i < levels.children.length; i++) {
+      panels.push(levels.children[i] as HTMLElement);
     }
-
-    // ── Auto-scroll: bring the submenu area into view ──
-    this._scrollSubmenuIntoView(submenuArea);
+    panels.forEach((p: HTMLElement) => {
+      const d: number = parseInt(p.getAttribute('data-depth') || '0', 10);
+      if (d >= minDepth && p.parentElement) {
+        p.parentElement.removeChild(p);
+      }
+    });
   }
 
   // ══════════════════════════════════════ AUTO-SCROLL ══════════════════════════════════════
 
-  private _scrollSubmenuIntoView(submenuArea: HTMLElement): void {
-    // Wait one frame so the element has dimensions / the slide-down animation has started
+  private _scrollSubmenuIntoView(panel: HTMLElement): void {
     window.setTimeout(() => {
       try {
-        const rect: ClientRect = submenuArea.getBoundingClientRect();
+        const rect: ClientRect = panel.getBoundingClientRect();
         const viewportHeight: number = window.innerHeight || document.documentElement.clientHeight;
 
-        // Only scroll if the submenu isn't fully visible
         const fullyVisible: boolean = rect.top >= 0 && rect.bottom <= viewportHeight;
         if (fullyVisible) { return; }
 
-        // Target: keep ~20px above the submenu for context (so user still sees parent tile edge)
         const offsetTop: number = (window.pageYOffset || document.documentElement.scrollTop)
                                   + rect.top - 20;
 
-        // Try smooth scroll on window first
         if (typeof window.scrollTo === 'function') {
           window.scrollTo({ top: offsetTop, behavior: 'smooth' });
         } else {
-          submenuArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
       } catch (e) {
-        // Fallback for older browsers
-        submenuArea.scrollIntoView();
+        panel.scrollIntoView();
       }
-    }, 80); // 80ms lets the slideDown animation begin so dimensions are accurate
+    }, 80);
   }
 
   // ══════════════════════════════════════ DYNAMIC WIDTH ════════════════════════════════════
@@ -1091,107 +1132,6 @@ export class NavigationRenderer {
       ? this._baseMaxWidth + this._expandedExtra
       : this._baseMaxWidth;
     wrapper.style.maxWidth = target + 'px';
-  }
-
-  // ══════════════════════════════════════ SUB-MENU (tile style) ════════════════════════════
-
-  private _createSubmenuList(items: INavigationItem[], level: number): HTMLElement {
-    const container: HTMLElement = document.createElement('div');
-    container.className = 'iconNav-subGrid';
-
-    items.forEach((item: INavigationItem) => {
-      const hasChildren: boolean = (item.children || []).length > 0;
-      const hasLink: boolean = item.LinkUrl.trim() !== '';
-
-      const tile: HTMLElement = document.createElement('div');
-      tile.className = 'iconNav-subTile';
-      tile.title = item.Description || item.Title;
-
-      if (item.IconUrl) {
-        const img: HTMLImageElement = document.createElement('img');
-        img.src = item.IconUrl;
-        img.alt = item.Title;
-        img.className = 'iconNav-subTileImg';
-        img.onerror = (): void => {
-          img.style.display = 'none';
-          const fb: HTMLElement = document.createElement('div');
-          fb.className = 'iconNav-subTileFallback';
-          fb.textContent = item.Title.charAt(0);
-          tile.insertBefore(fb, tile.firstChild);
-        };
-        tile.appendChild(img);
-      } else {
-        const fb: HTMLElement = document.createElement('div');
-        fb.className = 'iconNav-subTileFallback';
-        fb.textContent = item.Title.charAt(0);
-        tile.appendChild(fb);
-      }
-
-      const label: HTMLElement = document.createElement('span');
-      label.className = 'iconNav-subTileLabel';
-      label.textContent = item.Title;
-      tile.appendChild(label);
-
-      const childWrap: HTMLElement = document.createElement('div');
-      childWrap.className = 'iconNav-childWrap';
-      childWrap.style.display = 'none';
-
-      const wrapper: HTMLElement = document.createElement('div');
-      wrapper.className = 'iconNav-subTileWrapper';
-
-      if (hasLink && !hasChildren) {
-        tile.addEventListener('click', () => {
-          if (item.OpenInNewTab) {
-            window.open(item.LinkUrl, '_blank');
-          } else {
-            window.location.href = item.LinkUrl;
-          }
-        });
-      } else if (hasChildren) {
-        const chevron: HTMLElement = document.createElement('span');
-        chevron.className = 'iconNav-subChevron';
-        chevron.innerHTML = '&#9660;';
-        tile.appendChild(chevron);
-
-        childWrap.appendChild(this._createSubmenuList(item.children, level + 1));
-
-        tile.addEventListener('click', (e: Event) => {
-          e.stopPropagation();
-          const isOpen: boolean = childWrap.style.display !== 'none';
-
-          // Close any sibling that is currently open
-          if (!isOpen && wrapper.parentElement) {
-            const siblings: HTMLCollection = wrapper.parentElement.children;
-            for (let i: number = 0; i < siblings.length; i++) {
-              const sib: Element = siblings[i];
-              if (sib === wrapper) { continue; }
-
-              const sibChild: HTMLElement | null = sib.querySelector(':scope > .iconNav-childWrap');
-              const sibTile: HTMLElement | null  = sib.querySelector(':scope > .iconNav-subTile');
-              const sibChev: HTMLElement | null  = sib.querySelector(':scope > .iconNav-subTile > .iconNav-subChevron');
-
-              if (sibChild && sibChild.style.display !== 'none') {
-                sibChild.style.display = 'none';
-                sib.classList.remove('isOpen');                 // collapse sibling's full-row state
-                if (sibTile) { sibTile.classList.remove('iconNav-subTileActive'); }
-                if (sibChev) { sibChev.classList.remove('iconNav-subChevronOpen'); }
-              }
-            }
-          }
-
-          childWrap.style.display = isOpen ? 'none' : 'block';
-          wrapper.classList.toggle('isOpen', !isOpen);          // claim a full row when open
-          chevron.classList.toggle('iconNav-subChevronOpen');
-          tile.classList.toggle('iconNav-subTileActive');
-        });
-      }
-
-      wrapper.appendChild(tile);
-      wrapper.appendChild(childWrap);
-      container.appendChild(wrapper);
-    });
-
-    return container;
   }
 
   // ══════════════════════════════════════ LOADING / ERROR ══════════════════════════════════
@@ -1211,14 +1151,7 @@ export class NavigationRenderer {
 
 
 
-
-
-
-
-
-
-
-----new scss
+-------------new scss
 
 export class IconNavigationStyles {
 
@@ -1264,10 +1197,7 @@ export class IconNavigationStyles {
         padding: 4px 20px 10px;
       }
 
-      /* === ICON GRID =================================================
-         A simple left-packed flex row. The submenu panel is NOT a child
-         of this grid, so this grid never reflows when a tile opens — the
-         tiles always stay put with no gaps. */
+      /* === TOP-LEVEL TILE GRID (level 0) === */
 
       .iconNav-grid {
         display: flex;
@@ -1277,8 +1207,6 @@ export class IconNavigationStyles {
         padding: 20px;
         justify-content: flex-start;
       }
-
-      /* === TOP-LEVEL TILE === */
 
       .iconNav-tile {
         position: relative;
@@ -1313,9 +1241,7 @@ export class IconNavigationStyles {
         box-shadow: 0 4px 12px rgba(46, 134, 193, 0.3);
       }
 
-      .iconNav-tileActive:hover {
-        transform: scale(1.12);
-      }
+      .iconNav-tileActive:hover { transform: scale(1.12); }
 
       .iconNav-tileImg {
         width: var(--iconNav-tileIconSize);
@@ -1328,9 +1254,7 @@ export class IconNavigationStyles {
         transition: transform 0.25s ease;
       }
 
-      .iconNav-tile:hover .iconNav-tileImg {
-        transform: scale(1.1);
-      }
+      .iconNav-tile:hover .iconNav-tileImg { transform: scale(1.1); }
 
       .iconNav-tileFallback {
         width: var(--iconNav-tileIconSize);
@@ -1349,9 +1273,7 @@ export class IconNavigationStyles {
         transition: transform 0.25s ease;
       }
 
-      .iconNav-tile:hover .iconNav-tileFallback {
-        transform: scale(1.1);
-      }
+      .iconNav-tile:hover .iconNav-tileFallback { transform: scale(1.1); }
 
       .iconNav-tileLabel {
         font-size: var(--iconNav-tileLabelFontSize);
@@ -1366,19 +1288,21 @@ export class IconNavigationStyles {
         -webkit-box-orient: vertical;
       }
 
-      /* === SUBMENU AREA =============================================
-         Full-width block that sits BELOW the whole tile grid. It is a
-         normal block (not a flex/grid item), so it always spans the full
-         width and never indents or wedges between tiles. */
+      /* === STACKED LEVEL PANELS ======================================
+         Each drill-down level gets its own titled, full-width panel
+         here. They simply stack vertically — no nesting, no row-cutting. */
+
+      .iconNav-levels {
+        display: block;
+      }
 
       .iconNav-submenuArea {
-        display: none;
-        width: auto;
-        margin: 0 20px 20px;
+        display: block;
+        margin: 0 20px 16px;
         background: #ffffff;
         border: 1px solid #dee2e6;
         border-radius: 8px;
-        padding: 20px;
+        padding: 16px 20px 20px;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         animation: iconNav-slideDown 0.25s ease;
       }
@@ -1397,36 +1321,20 @@ export class IconNavigationStyles {
         border-bottom: 2px solid var(--iconNav-borderColor);
       }
 
-      /* === SUB-ITEM TILES === */
+      /* === SUB-TILE GRID (levels 1+) === */
 
       .iconNav-subGrid {
         display: flex;
         flex-wrap: wrap;
         align-items: flex-start;
         gap: 12px;
-        padding: 10px 0;
-      }
-
-      .iconNav-subTileWrapper {
-        display: flex;
-        flex: 0 0 auto;
-        flex-direction: column;
-        align-items: flex-start;
-        position: relative;
-        transition: flex-basis 0.2s ease;
-      }
-
-      /* When a sub-tile's children are open, it claims a FULL ROW so the
-         nested panel drops cleanly beneath it instead of ballooning the
-         tile sideways and leaving dead space. */
-      .iconNav-subTileWrapper.isOpen {
-        flex: 1 1 100%;
-        width: 100%;
+        padding: 0;
       }
 
       .iconNav-subTile {
         position: relative;
         display: flex;
+        flex: 0 0 auto;
         flex-direction: column;
         align-items: center;
         justify-content: center;
@@ -1453,11 +1361,10 @@ export class IconNavigationStyles {
       .iconNav-subTileActive {
         border-color: #2e86c1 !important;
         background: #eaf2f8 !important;
+        box-shadow: 0 4px 12px rgba(46, 134, 193, 0.3);
       }
 
-      .iconNav-subTileActive:hover {
-        transform: scale(1.12);
-      }
+      .iconNav-subTileActive:hover { transform: scale(1.12); }
 
       .iconNav-subTileImg {
         width: var(--iconNav-subIconSize);
@@ -1470,9 +1377,7 @@ export class IconNavigationStyles {
         transition: transform 0.25s ease;
       }
 
-      .iconNav-subTile:hover .iconNav-subTileImg {
-        transform: scale(1.1);
-      }
+      .iconNav-subTile:hover .iconNav-subTileImg { transform: scale(1.1); }
 
       .iconNav-subTileFallback {
         width: var(--iconNav-subIconSize);
@@ -1491,9 +1396,7 @@ export class IconNavigationStyles {
         transition: transform 0.25s ease;
       }
 
-      .iconNav-subTile:hover .iconNav-subTileFallback {
-        transform: scale(1.1);
-      }
+      .iconNav-subTile:hover .iconNav-subTileFallback { transform: scale(1.1); }
 
       .iconNav-subTileLabel {
         font-size: var(--iconNav-subTileLabelFontSize);
@@ -1508,35 +1411,23 @@ export class IconNavigationStyles {
         -webkit-box-orient: vertical;
       }
 
-      .iconNav-subChevron {
-        font-size: 8px;
-        color: #7f8c8d;
+      /* === EXPAND CARET (shown on tiles that have children) === */
+
+      .iconNav-caret {
         position: absolute;
-        bottom: 4px;
-        right: 4px;
-        transition: transform 0.2s;
+        bottom: 3px;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 8px;
+        color: #95a5a6;
+        transition: transform 0.2s ease;
+        pointer-events: none;
       }
 
-      .iconNav-subChevronOpen {
-        transform: rotate(180deg);
-      }
-
-      /* Nested children panel: full-width, indented look, tied to its
-         parent tile by the gold left accent. */
-      .iconNav-childWrap {
-        width: 100%;
-        margin-top: 12px;
-        padding: 14px 16px;
-        background: #f7f9fb;
-        border: 1px solid #e3e8ee;
-        border-left: 3px solid var(--iconNav-borderColor);
-        border-radius: 6px;
-        box-sizing: border-box;
-        animation: iconNav-slideDown 0.2s ease;
-      }
-
-      .iconNav-childWrap > .iconNav-subGrid {
-        padding: 0;
+      .iconNav-tileActive .iconNav-caret,
+      .iconNav-subTileActive .iconNav-caret {
+        color: #2e86c1;
+        transform: translateX(-50%) rotate(180deg);
       }
 
       /* === LOADING / ERROR === */
@@ -1570,9 +1461,7 @@ export class IconNavigationStyles {
         cursor: pointer;
       }
 
-      .iconNav-retryBtn:hover {
-        background: #1a5276;
-      }
+      .iconNav-retryBtn:hover { background: #1a5276; }
 
       .iconNav-empty {
         padding: 20px;
@@ -1584,5 +1473,5 @@ export class IconNavigationStyles {
     document.head.appendChild(style);
   }
 }
-  }
-}
+
+
