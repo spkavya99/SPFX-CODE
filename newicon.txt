@@ -898,3 +898,357 @@ export class IconNavigationStyles {
     document.head.appendChild(style);
   }
 }
+
+
+
+
+-----new renderts------------
+
+
+import { INavigationItem } from '../models/INavigationItem';
+
+export interface INavigationRendererOptions {
+  autoExpandWidth: boolean;
+  baseMaxWidth: number;
+  expandedExtra: number;
+}
+
+export class NavigationRenderer {
+
+  private _container: HTMLElement;
+  private _tree: INavigationItem[] = [];
+  private _autoExpandWidth: boolean;
+  private _baseMaxWidth: number;
+  private _expandedExtra: number;
+
+  constructor(container: HTMLElement, options: INavigationRendererOptions) {
+    this._container = container;
+    this._autoExpandWidth = options.autoExpandWidth;
+    this._baseMaxWidth = options.baseMaxWidth;
+    this._expandedExtra = options.expandedExtra;
+  }
+
+  // ══════════════════════════════════════ MAIN RENDER ══════════════════════════════════════
+
+  public render(tree: INavigationItem[]): void {
+    this._tree = tree;
+    this._container.innerHTML = '';
+
+    const grid: HTMLElement = document.createElement('div');
+    grid.className = 'iconNav-grid';
+
+    tree.forEach((item: INavigationItem) => {
+      grid.appendChild(this._createIconTile(item));
+    });
+
+    // NOTE: the submenu panel now lives INSIDE the grid so it can span a full
+    // row (grid-column: 1 / -1) and be moved directly beneath the clicked
+    // tile's row. It starts hidden.
+    const submenuArea: HTMLElement = document.createElement('div');
+    submenuArea.className = 'iconNav-submenuArea';
+    submenuArea.id = 'iconNav-submenuArea';
+    submenuArea.style.display = 'none';
+    grid.appendChild(submenuArea);
+
+    this._container.appendChild(grid);
+  }
+
+  // ══════════════════════════════════════ ICON TILE ══════════════════════════════════════
+
+  private _createIconTile(item: INavigationItem): HTMLElement {
+    const tile: HTMLElement = document.createElement('div');
+    tile.className = 'iconNav-tile';
+    tile.setAttribute('data-id', item.Id.toString());
+    tile.title = item.Description || item.Title;
+
+    if (item.IconUrl) {
+      const img: HTMLImageElement = document.createElement('img');
+      img.src = item.IconUrl;
+      img.alt = item.Title;
+      img.className = 'iconNav-tileImg';
+      img.onerror = (): void => {
+        img.style.display = 'none';
+        const fb: HTMLElement = document.createElement('div');
+        fb.className = 'iconNav-tileFallback';
+        fb.textContent = item.Title.charAt(0);
+        tile.insertBefore(fb, tile.firstChild);
+      };
+      tile.appendChild(img);
+    } else {
+      const fb: HTMLElement = document.createElement('div');
+      fb.className = 'iconNav-tileFallback';
+      fb.textContent = item.Title.charAt(0);
+      tile.appendChild(fb);
+    }
+
+    const label: HTMLElement = document.createElement('span');
+    label.className = 'iconNav-tileLabel';
+    label.textContent = item.Title;
+    tile.appendChild(label);
+
+    tile.addEventListener('click', () => {
+      this._onTopLevelClick(item, tile);
+    });
+
+    return tile;
+  }
+
+  // ══════════════════════════════════════ TOP-LEVEL CLICK ══════════════════════════════════
+
+  private _onTopLevelClick(item: INavigationItem, tileEl: HTMLElement): void {
+    const submenuArea: HTMLElement = document.getElementById('iconNav-submenuArea') as HTMLElement;
+    const wrapper: HTMLElement | null = document.getElementById('iconNav-wrapper');
+
+    // Already expanded → collapse
+    if (item.isExpanded) {
+      item.isExpanded = false;
+      tileEl.classList.remove('iconNav-tileActive');
+      submenuArea.innerHTML = '';
+      submenuArea.style.display = 'none';
+      this._setWrapperWidth(wrapper, false);
+      return;
+    }
+
+    // Collapse any other open tiles
+    this._tree.forEach((i: INavigationItem) => { i.isExpanded = false; });
+    document.querySelectorAll('.iconNav-tileActive')
+      .forEach((el: Element) => { el.classList.remove('iconNav-tileActive'); });
+
+    // No children → just navigate, don't expand
+    if (item.children.length === 0) {
+      if (item.LinkUrl && item.LinkUrl.trim() !== '') {
+        if (item.OpenInNewTab) {
+          window.open(item.LinkUrl, '_blank');
+        } else {
+          window.location.href = item.LinkUrl;
+        }
+        return;
+      }
+    }
+
+    // Expand
+    item.isExpanded = true;
+    tileEl.classList.add('iconNav-tileActive');
+
+    submenuArea.innerHTML = '';
+
+    if (item.children.length > 0) {
+      this._setWrapperWidth(wrapper, true);
+
+      const header: HTMLElement = document.createElement('div');
+      header.className = 'iconNav-submenuHeader';
+      header.textContent = item.Title;
+      submenuArea.appendChild(header);
+
+      submenuArea.appendChild(this._createSubmenuList(item.children, 1));
+    } else {
+      const empty: HTMLElement = document.createElement('div');
+      empty.className = 'iconNav-empty';
+      empty.textContent = 'No sub-items configured.';
+      submenuArea.appendChild(empty);
+    }
+
+    // ── Drop the panel directly beneath the clicked tile's ROW, then reveal it ──
+    this._positionSubmenu(tileEl, submenuArea);
+
+    // ── Auto-scroll: bring the submenu area into view ──
+    this._scrollSubmenuIntoView(submenuArea);
+  }
+
+  // ══════════════════════════════════════ ROW-AWARE PANEL PLACEMENT ═════════════════════════
+
+  /**
+   * Moves the full-width submenu panel so it sits immediately after the LAST
+   * tile on the same visual row as the clicked tile. This keeps the clicked
+   * tile's row intact (no mid-row gap) and lets the remaining tiles flow
+   * cleanly below the panel.
+   *
+   * Relies on .iconNav-grid being `display: grid` and .iconNav-submenuArea
+   * having `grid-column: 1 / -1`.
+   */
+  private _positionSubmenu(tileEl: HTMLElement, submenuArea: HTMLElement): void {
+    const grid: HTMLElement | null = tileEl.parentElement;
+    if (!grid) {
+      submenuArea.style.display = 'block';
+      return;
+    }
+
+    // Hide while measuring so the panel itself doesn't occupy a row.
+    submenuArea.style.display = 'none';
+
+    // Collect the top-level tiles (the panel is excluded by its class).
+    const tiles: HTMLElement[] = [];
+    grid.querySelectorAll('.iconNav-tile').forEach((el: Element) => {
+      tiles.push(el as HTMLElement);
+    });
+
+    // Find the right-most tile sharing the clicked tile's row (same offsetTop).
+    const rowTop: number = tileEl.offsetTop;
+    let lastInRow: HTMLElement = tileEl;
+    tiles.forEach((t: HTMLElement) => {
+      if (Math.abs(t.offsetTop - rowTop) < 4) { lastInRow = t; }
+    });
+
+    // Insert the panel before the first tile of the NEXT row (or at the end).
+    const idx: number = tiles.indexOf(lastInRow);
+    const refTile: HTMLElement | null = (idx >= 0 && tiles[idx + 1]) ? tiles[idx + 1] : null;
+    grid.insertBefore(submenuArea, refTile);
+
+    submenuArea.style.display = 'block';
+  }
+
+  // ══════════════════════════════════════ AUTO-SCROLL ══════════════════════════════════════
+
+  private _scrollSubmenuIntoView(submenuArea: HTMLElement): void {
+    // Wait one frame so the element has dimensions / the slide-down animation has started
+    window.setTimeout(() => {
+      try {
+        const rect: ClientRect = submenuArea.getBoundingClientRect();
+        const viewportHeight: number = window.innerHeight || document.documentElement.clientHeight;
+
+        // Only scroll if the submenu isn't fully visible
+        const fullyVisible: boolean = rect.top >= 0 && rect.bottom <= viewportHeight;
+        if (fullyVisible) { return; }
+
+        // Target: keep ~20px above the submenu for context (so user still sees parent tile edge)
+        const offsetTop: number = (window.pageYOffset || document.documentElement.scrollTop)
+                                  + rect.top - 20;
+
+        // Try smooth scroll on window first
+        if (typeof window.scrollTo === 'function') {
+          window.scrollTo({ top: offsetTop, behavior: 'smooth' });
+        } else {
+          submenuArea.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      } catch (e) {
+        // Fallback for older browsers
+        submenuArea.scrollIntoView();
+      }
+    }, 80); // 80ms lets the slideDown animation begin so dimensions are accurate
+  }
+
+  // ══════════════════════════════════════ DYNAMIC WIDTH ════════════════════════════════════
+
+  private _setWrapperWidth(wrapper: HTMLElement | null, expanded: boolean): void {
+    if (!wrapper || !this._autoExpandWidth) { return; }
+    const target: number = expanded
+      ? this._baseMaxWidth + this._expandedExtra
+      : this._baseMaxWidth;
+    wrapper.style.maxWidth = target + 'px';
+  }
+
+  // ══════════════════════════════════════ SUB-MENU (tile style) ════════════════════════════
+
+  private _createSubmenuList(items: INavigationItem[], level: number): HTMLElement {
+    const container: HTMLElement = document.createElement('div');
+    container.className = 'iconNav-subGrid';
+
+    items.forEach((item: INavigationItem) => {
+      const hasChildren: boolean = (item.children || []).length > 0;
+      const hasLink: boolean = item.LinkUrl.trim() !== '';
+
+      const tile: HTMLElement = document.createElement('div');
+      tile.className = 'iconNav-subTile';
+      tile.title = item.Description || item.Title;
+
+      if (item.IconUrl) {
+        const img: HTMLImageElement = document.createElement('img');
+        img.src = item.IconUrl;
+        img.alt = item.Title;
+        img.className = 'iconNav-subTileImg';
+        img.onerror = (): void => {
+          img.style.display = 'none';
+          const fb: HTMLElement = document.createElement('div');
+          fb.className = 'iconNav-subTileFallback';
+          fb.textContent = item.Title.charAt(0);
+          tile.insertBefore(fb, tile.firstChild);
+        };
+        tile.appendChild(img);
+      } else {
+        const fb: HTMLElement = document.createElement('div');
+        fb.className = 'iconNav-subTileFallback';
+        fb.textContent = item.Title.charAt(0);
+        tile.appendChild(fb);
+      }
+
+      const label: HTMLElement = document.createElement('span');
+      label.className = 'iconNav-subTileLabel';
+      label.textContent = item.Title;
+      tile.appendChild(label);
+
+      const childWrap: HTMLElement = document.createElement('div');
+      childWrap.className = 'iconNav-childWrap';
+      childWrap.style.display = 'none';
+
+      const wrapper: HTMLElement = document.createElement('div');
+      wrapper.className = 'iconNav-subTileWrapper';
+
+      if (hasLink && !hasChildren) {
+        tile.addEventListener('click', () => {
+          if (item.OpenInNewTab) {
+            window.open(item.LinkUrl, '_blank');
+          } else {
+            window.location.href = item.LinkUrl;
+          }
+        });
+      } else if (hasChildren) {
+        const chevron: HTMLElement = document.createElement('span');
+        chevron.className = 'iconNav-subChevron';
+        chevron.innerHTML = '&#9660;';
+        tile.appendChild(chevron);
+
+        childWrap.appendChild(this._createSubmenuList(item.children, level + 1));
+
+        tile.addEventListener('click', (e: Event) => {
+          e.stopPropagation();
+          const isOpen: boolean = childWrap.style.display !== 'none';
+
+          // Close any sibling that is currently open
+          if (!isOpen && wrapper.parentElement) {
+            const siblings: HTMLCollection = wrapper.parentElement.children;
+            for (let i: number = 0; i < siblings.length; i++) {
+              const sib: Element = siblings[i];
+              if (sib === wrapper) { continue; }
+
+              const sibChild: HTMLElement | null = sib.querySelector(':scope > .iconNav-childWrap');
+              const sibTile: HTMLElement | null  = sib.querySelector(':scope > .iconNav-subTile');
+              const sibChev: HTMLElement | null  = sib.querySelector(':scope > .iconNav-subTile > .iconNav-subChevron');
+
+              if (sibChild && sibChild.style.display !== 'none') {
+                sibChild.style.display = 'none';
+                sib.classList.remove('isOpen');                 // collapse sibling's full-row state
+                if (sibTile) { sibTile.classList.remove('iconNav-subTileActive'); }
+                if (sibChev) { sibChev.classList.remove('iconNav-subChevronOpen'); }
+              }
+            }
+          }
+
+          childWrap.style.display = isOpen ? 'none' : 'block';
+          wrapper.classList.toggle('isOpen', !isOpen);          // claim a full row when open
+          chevron.classList.toggle('iconNav-subChevronOpen');
+          tile.classList.toggle('iconNav-subTileActive');
+        });
+      }
+
+      wrapper.appendChild(tile);
+      wrapper.appendChild(childWrap);
+      container.appendChild(wrapper);
+    });
+
+    return container;
+  }
+
+  // ══════════════════════════════════════ LOADING / ERROR ══════════════════════════════════
+
+  public renderLoading(): void {
+    this._container.innerHTML = '<div class="iconNav-loading">Loading navigation...</div>';
+  }
+
+  public renderError(msg: string): void {
+    this._container.innerHTML =
+      '<div class="iconNav-error">'
+      + '<span>⚠ ' + msg + '</span>'
+      + '<button id="iconNav-retry" class="iconNav-retryBtn">Retry</button>'
+      + '</div>';
+  }
+}
