@@ -1729,30 +1729,30 @@ export class NavigationRenderer {
 
 public onInit(): Promise<void> {
   const css = `
-    /* Remove side padding (full width) */
-    #spPageCanvasContent { max-width: 100% !important; }
-    [data-automation-id="CanvasZone"]:not(.CanvasZone--fullWidth) {
+    /* 1. Full-width page — remove side padding */
+    #spPageCanvasContent,
+    .SPPageChrome-app,
+    [data-automation-id="pageHeader"],
+    [class*="contentRegion"] {
       max-width: 100% !important;
       padding-left: 0 !important;
       padding-right: 0 !important;
     }
-    .CanvasSection {
-      padding-left: 0 !important;
-      padding-right: 0 !important;
-    }
 
-    /* 3-column sections: 10% / 80% / 10% */
-    .CanvasSection:has(> div:nth-child(3)):not(:has(> div:nth-child(4))) > div:nth-child(1) {
+    /* 2. Three equal columns → 10% / 80% / 10%
+       Each column = [data-automation-id="CanvasSection"]
+       Equal 3-col layout = data-section-factor="4" on all 3 */
+    [data-automation-id="CanvasSection"][data-section-factor="4"][data-section-index="1"] {
       flex: 0 0 10% !important;
       max-width: 10% !important;
       width: 10% !important;
     }
-    .CanvasSection:has(> div:nth-child(3)):not(:has(> div:nth-child(4))) > div:nth-child(2) {
+    [data-automation-id="CanvasSection"][data-section-factor="4"][data-section-index="2"] {
       flex: 0 0 80% !important;
       max-width: 80% !important;
       width: 80% !important;
     }
-    .CanvasSection:has(> div:nth-child(3)):not(:has(> div:nth-child(4))) > div:nth-child(3) {
+    [data-automation-id="CanvasSection"][data-section-factor="4"][data-section-index="3"] {
       flex: 0 0 10% !important;
       max-width: 10% !important;
       width: 10% !important;
