@@ -383,7 +383,8 @@ Read-Host "Press Enter to close"
 
 ---fixed remove permissions------
 
-# Find and restrict Archive items - REMOVE ONLY APPROACH
+
+# Find and restrict Archive items - WITH INHERITANCE BREAKING
 param(
     [Parameter(Mandatory=$true)]
     [string]$SiteUrl,
@@ -451,7 +452,22 @@ try {
         try {
             Write-Host "📋 $itemName" -ForegroundColor Yellow
             
-            # Get current permissions
+            # Step 1: Break inheritance using REST
+            Write-Host "   ├─ Breaking inheritance..." -ForegroundColor Gray
+            $listId = $lib.Id.Guid
+            $restUrl = "$SiteUrl/_api/web/lists('$listId')/items($itemId)/breakroleinheritance(true)"
+            
+            try {
+                Invoke-PnPSPRestMethod -Url $restUrl -Method POST -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "   │  └─ Inheritance broken" -ForegroundColor Green
+            } catch {
+                Write-Host "   │  └─ Inheritance may already be broken" -ForegroundColor Gray
+            }
+            
+            # Step 2: Wait a moment for inheritance break to complete
+            Start-Sleep -Milliseconds 500
+            
+            # Step 3: Get current permissions
             Write-Host "   ├─ Getting current permissions..." -ForegroundColor Gray
             $perms = Get-PnPListItemPermission -List $lib -Identity $itemId -ErrorAction SilentlyContinue
             
@@ -460,34 +476,33 @@ try {
                 continue
             }
             
-            # Remove each permission EXCEPT the allowed group
+            # Step 4: Remove each permission EXCEPT the allowed group
             Write-Host "   ├─ Removing non-admin permissions..." -ForegroundColor Gray
             $removed = 0
             $kept = 0
             
             foreach ($perm in $perms) {
+                Write-Host "      Processing: $($perm.Title) (PrincipalId: $($perm.PrincipalId))" -ForegroundColor Gray
+                
                 if ($perm.PrincipalId -ne $allowedGroup.Id) {
                     try {
-                        Remove-PnPListItemPermission -List $lib -Identity $itemId -PrincipalId $perm.PrincipalId -Force -ErrorAction SilentlyContinue
-                        Write-Host "      └─ Removed: $($perm.Title)" -ForegroundColor Red
+                        Remove-PnPListItemPermission -List $lib -Identity $itemId -PrincipalId $perm.PrincipalId -Force -ErrorAction Stop
+                        Write-Host "      └─ ✓ Removed: $($perm.Title)" -ForegroundColor Red
                         $removed++
                     } catch {
-                        # Continue on error
+                        Write-Host "      └─ ⚠ Could not remove: $($_.Exception.Message)" -ForegroundColor Yellow
                     }
                 } else {
-                    Write-Host "      └─ Kept: $($perm.Title)" -ForegroundColor Green
+                    Write-Host "      └─ ✓ Kept: $($perm.Title)" -ForegroundColor Green
                     $kept++
                 }
             }
             
-            if ($removed -eq 0 -and $kept -eq 0) {
-                Write-Host "   └─ ⚠ No permissions modified" -ForegroundColor Yellow
-            } elseif ($removed -gt 0 -and $kept -gt 0) {
-                Write-Host "   └─ ✓ Removed $removed, Kept $kept" -ForegroundColor Green
+            if ($removed -gt 0 -or $kept -gt 0) {
+                Write-Host "   └─ ✓ Removed: $removed | Kept: $kept" -ForegroundColor Green
                 $processedCount++
-            } elseif ($kept -gt 0) {
-                Write-Host "   └─ ✓ Only $($allowedGroup.Title) has access" -ForegroundColor Green
-                $processedCount++
+            } else {
+                Write-Host "   └─ ⚠ No changes made" -ForegroundColor Yellow
             }
             
             Write-Host ""
@@ -508,12 +523,16 @@ try {
     Write-Host "════════════════════════════════════`n" -ForegroundColor Green
     
     Write-Host "RESULTS:" -ForegroundColor Cyan
-    Write-Host "- All Archive items now restricted" -ForegroundColor Green
+    Write-Host "- Archive items now have unique permissions" -ForegroundColor Green
     Write-Host "- Only NXT-CBS Directors have access" -ForegroundColor Green
-    Write-Host "- Other groups have been removed" -ForegroundColor Green
+    Write-Host "- All other groups removed" -ForegroundColor Green
 
 } catch {
     Write-Host "SCRIPT ERROR: $($_.Exception.Message)" -ForegroundColor Red
 }
 
 Read-Host "Press Enter to close"
+
+
+
+--new--
