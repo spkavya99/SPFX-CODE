@@ -524,3 +524,165 @@ try {
 }
 
 Read-Host "Press Enter to close"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-----------------------------csom-----------------
+
+
+# Restrict Archive items - CSOM Approach (Admin)
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SiteUrl,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$LibraryName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AllowedGroupName = "NXT-CBS Directors"
+)
+
+try {
+    # Load SharePoint CSOM assemblies
+    Write-Host "Loading SharePoint assemblies..." -ForegroundColor Green
+    Add-Type -Path "C:\Program Files\Common Files\Microsoft Shared\Web Server Extensions\16\ISAPI\Microsoft.SharePoint.Client.dll"
+    Add-Type -Path "C:\Program Files\Common Files\Microsoft Shared\Web Server Extensions\16\ISAPI\Microsoft.SharePoint.Client.Runtime.dll"
+    
+    # Connect with credentials
+    Write-Host "Connecting to SharePoint..." -ForegroundColor Green
+    $credentials = Get-Credential
+    $context = New-Object Microsoft.SharePoint.Client.ClientContext($SiteUrl)
+    $context.Credentials = $credentials
+    
+    # Get web and list
+    $web = $context.Web
+    $list = $web.Lists.GetByTitle($LibraryName)
+    $context.Load($web)
+    $context.Load($list)
+    $context.ExecuteQuery()
+    
+    Write-Host "Connected to: $($web.Title)" -ForegroundColor Green
+    Write-Host "Library: $($list.Title)`n" -ForegroundColor Cyan
+    
+    # Get allowed group
+    $groups = $web.SiteGroups
+    $context.Load($groups)
+    $context.ExecuteQuery()
+    
+    $allowedGroup = $groups | Where-Object {$_.Title -eq $AllowedGroupName}
+    if ($null -eq $allowedGroup) {
+        Write-Host "ERROR: Group '$AllowedGroupName' not found" -ForegroundColor Red
+        return
+    }
+    
+    Write-Host "Admin Group: $($allowedGroup.Title)`n" -ForegroundColor Green
+    
+    # Get all items with Archive document type
+    $query = New-Object Microsoft.SharePoint.Client.CamlQuery
+    $query.ViewXml = "<View><Query><Where><Eq><FieldRef Name='Document_x0020_Type'/><Value Type='Text'>Archive</Value></Eq></Where></Query></View>"
+    
+    $items = $list.GetItems($query)
+    $context.Load($items)
+    $context.ExecuteQuery()
+    
+    if ($items.Count -eq 0) {
+        Write-Host "⚠ No Archive items found" -ForegroundColor Yellow
+        return
+    }
+    
+    Write-Host "Found $($items.Count) Archive items`n" -ForegroundColor Green
+    
+    $processedCount = 0
+    $errorCount = 0
+    
+    foreach ($item in $items) {
+        $itemName = $item["FileLeafRef"]
+        
+        try {
+            Write-Host "📋 $itemName" -ForegroundColor Yellow
+            
+            # Break inheritance
+            Write-Host "   ├─ Breaking inheritance..." -ForegroundColor Gray
+            $item.BreakRoleInheritance($true)
+            
+            # Get role assignments
+            $roleAssignments = $item.RoleAssignments
+            $context.Load($roleAssignments)
+            $context.ExecuteQuery()
+            
+            Write-Host "   ├─ Removing non-admin groups..." -ForegroundColor Gray
+            
+            # Delete role assignments for non-admin groups
+            $toRemove = @()
+            foreach ($assignment in $roleAssignments) {
+                $principal = $assignment.Member
+                $context.Load($principal)
+                $context.ExecuteQuery()
+                
+                if ($assignment.PrincipalId -ne $allowedGroup.Id) {
+                    $toRemove += $assignment
+                    Write-Host "      └─ Marked for removal: $($principal.Title)" -ForegroundColor Red
+                }
+            }
+            
+            # Remove the marked assignments
+            foreach ($assignment in $toRemove) {
+                $roleAssignments.Remove($assignment)
+            }
+            
+            # Add permission for allowed group
+            Write-Host "   ├─ Adding Edit permission to $($allowedGroup.Title)..." -ForegroundColor Gray
+            
+            # Get Edit role
+            $roleDefinitions = $web.RoleDefinitions
+            $context.Load($roleDefinitions)
+            $context.ExecuteQuery()
+            
+            $editRole = $roleDefinitions | Where-Object {$_.Name -eq "Edit"}
+            
+            # Create new role assignment
+            $roleDefBindingCollection = New-Object Microsoft.SharePoint.Client.RoleDefinitionBindingCollection($context)
+            $roleDefBindingCollection.Add($editRole)
+            
+            $roleAssignments.Add($allowedGroup, $roleDefBindingCollection)
+            
+            # Execute all changes
+            $context.ExecuteQuery()
+            
+            Write-Host "   └─ ✓ Permissions updated" -ForegroundColor Green
+            Write-Host ""
+            $processedCount++
+            
+        } catch {
+            Write-Host "   └─ ✗ ERROR: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host ""
+            $errorCount++
+        }
+    }
+    
+    # Summary
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "COMPLETE" -ForegroundColor Green
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "✓ Processed: $processedCount" -ForegroundColor Green
+    Write-Host "✗ Errors: $errorCount" -ForegroundColor $(if ($errorCount -eq 0) {"Green"} else {"Red"})
+    Write-Host "════════════════════════════════════`n" -ForegroundColor Green
+
+} catch {
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "Stack Trace: $($_.ScriptStackTrace)" -ForegroundColor Red
+}
+
+Read-Host "Press Enter to close"
