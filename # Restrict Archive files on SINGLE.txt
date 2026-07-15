@@ -1,0 +1,236 @@
+# Restrict Archive files on SINGLE LIBRARY - Test Version
+# Keep only NXT-CBS Directors
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SiteUrl,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$LibraryName,  # Specify the library to test on
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AllowedGroupName = "NXT-CBS Directors"
+)
+
+# Connect to SharePoint
+Write-Host "Connecting to SharePoint: $SiteUrl" -ForegroundColor Green
+Connect-PnPOnline -Url $SiteUrl -Interactive
+
+# Get the allowed group (NXT-CBS Directors)
+$allowedGroup = Get-PnPGroup -Identity $AllowedGroupName -ErrorAction SilentlyContinue
+
+if ($null -eq $allowedGroup) {
+    Write-Host "ERROR: Group '$AllowedGroupName' not found" -ForegroundColor Red
+    Write-Host "Available groups:" -ForegroundColor Yellow
+    Get-PnPGroup | Select-Object Title
+    exit
+}
+
+Write-Host "Target Group: $($allowedGroup.Title) (ID: $($allowedGroup.Id))" -ForegroundColor Green
+
+# Get the specific library
+$lib = Get-PnPList -Identity $LibraryName -ErrorAction SilentlyContinue
+
+if ($null -eq $lib) {
+    Write-Host "ERROR: Library '$LibraryName' not found" -ForegroundColor Red
+    Write-Host "Available libraries:" -ForegroundColor Yellow
+    Get-PnPList | Where-Object {$_.BaseType -eq "DocumentLibrary"} | Select-Object Title
+    exit
+}
+
+Write-Host "Testing on Library: $($lib.Title)" -ForegroundColor Green
+Write-Host "Starting permission restriction process...`n" -ForegroundColor Cyan
+
+$processedCount = 0
+$errorCount = 0
+
+# Get all items with Archive content type in this library
+$archiveItems = Get-PnPListItem -List $lib -PageSize 5000 | Where-Object {
+    $_.FieldValues.ContentType -eq "Archive"
+}
+
+if ($archiveItems.Count -eq 0) {
+    Write-Host "⚠ No archived items found in $($lib.Title)" -ForegroundColor Yellow
+    exit
+}
+
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "Library: $($lib.Title)" -ForegroundColor Cyan
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "Found $($archiveItems.Count) archived items`n"
+
+foreach ($item in $archiveItems) {
+    $itemName = $item.FieldValues.FileLeafRef
+    
+    try {
+        # Step 1: Break inheritance (make unique)
+        Set-PnPListItemPermission -List $lib -Identity $item.Id -InheritPermissions $false -ErrorAction Stop
+        Write-Host "  📋 $itemName" -ForegroundColor Yellow
+        Write-Host "     ├─ Breaking inheritance..." -ForegroundColor Gray
+        
+        # Step 2: Get all current permissions
+        $perms = Get-PnPListItemPermission -List $lib -Identity $item.Id
+        
+        # Step 3: Remove all permissions except the target group
+        Write-Host "     ├─ Removing existing groups..." -ForegroundColor Gray
+        foreach ($perm in $perms) {
+            # Skip if it's the group we want to keep
+            if ($perm.PrincipalId -ne $allowedGroup.Id) {
+                Remove-PnPListItemPermission -List $lib -Identity $item.Id -PrincipalId $perm.PrincipalId -Force
+                Write-Host "        └─ Removed: $($perm.Title)" -ForegroundColor Red
+            }
+        }
+        
+        # Step 4: Grant permission to NXT-CBS Directors (if not already granted)
+        $groupHasAccess = $perms | Where-Object {$_.PrincipalId -eq $allowedGroup.Id}
+        
+        if ($null -eq $groupHasAccess) {
+            Set-PnPListItemPermission -List $lib -Identity $item.Id -PrincipalId $allowedGroup.Id -AddRole "Edit" -ErrorAction Stop
+            Write-Host "     └─ ✓ Granted Edit permission to: $($allowedGroup.Title)" -ForegroundColor Green
+        } else {
+            Write-Host "     └─ ✓ $($allowedGroup.Title) already has permission" -ForegroundColor Green
+        }
+        
+        $processedCount++
+        
+    } catch {
+        Write-Host "     └─ ✗ ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        $errorCount++
+    }
+}
+
+# Summary
+Write-Host ""
+Write-Host "════════════════════════════════════════" -ForegroundColor Green
+Write-Host "TEST COMPLETE" -ForegroundColor Green
+Write-Host "════════════════════════════════════════" -ForegroundColor Green
+Write-Host "✓ Files Processed: $processedCount" -ForegroundColor Green
+Write-Host "✗ Errors: $errorCount" -ForegroundColor $(if ($errorCount -eq 0) {"Green"} else {"Red"})
+Write-Host "════════════════════════════════════════`n" -ForegroundColor Green
+
+if ($errorCount -eq 0 -and $processedCount -gt 0) {
+    Write-Host "✓ Test successful! You can now run on all libraries." -ForegroundColor Green
+}
+
+
+
+
+allllllllll
+
+
+
+# Restrict Archive files on SINGLE LIBRARY - Test Version
+# Keep only NXT-CBS Directors
+
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SiteUrl,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$LibraryName,  # Specify the library to test on
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AllowedGroupName = "NXT-CBS Directors"
+)
+
+# Connect to SharePoint
+Write-Host "Connecting to SharePoint: $SiteUrl" -ForegroundColor Green
+Connect-PnPOnline -Url $SiteUrl -Interactive
+
+# Get the allowed group (NXT-CBS Directors)
+$allowedGroup = Get-PnPGroup -Identity $AllowedGroupName -ErrorAction SilentlyContinue
+
+if ($null -eq $allowedGroup) {
+    Write-Host "ERROR: Group '$AllowedGroupName' not found" -ForegroundColor Red
+    Write-Host "Available groups:" -ForegroundColor Yellow
+    Get-PnPGroup | Select-Object Title
+    exit
+}
+
+Write-Host "Target Group: $($allowedGroup.Title) (ID: $($allowedGroup.Id))" -ForegroundColor Green
+
+# Get the specific library
+$lib = Get-PnPList -Identity $LibraryName -ErrorAction SilentlyContinue
+
+if ($null -eq $lib) {
+    Write-Host "ERROR: Library '$LibraryName' not found" -ForegroundColor Red
+    Write-Host "Available libraries:" -ForegroundColor Yellow
+    Get-PnPList | Where-Object {$_.BaseType -eq "DocumentLibrary"} | Select-Object Title
+    exit
+}
+
+Write-Host "Testing on Library: $($lib.Title)" -ForegroundColor Green
+Write-Host "Starting permission restriction process...`n" -ForegroundColor Cyan
+
+$processedCount = 0
+$errorCount = 0
+
+# Get all items with Archive content type in this library
+$archiveItems = Get-PnPListItem -List $lib -PageSize 5000 | Where-Object {
+    $_.FieldValues.ContentType -eq "Archive"
+}
+
+if ($archiveItems.Count -eq 0) {
+    Write-Host "⚠ No archived items found in $($lib.Title)" -ForegroundColor Yellow
+    exit
+}
+
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "Library: $($lib.Title)" -ForegroundColor Cyan
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "Found $($archiveItems.Count) archived items`n"
+
+foreach ($item in $archiveItems) {
+    $itemName = $item.FieldValues.FileLeafRef
+    
+    try {
+        # Step 1: Break inheritance (make unique)
+        Set-PnPListItemPermission -List $lib -Identity $item.Id -InheritPermissions $false -ErrorAction Stop
+        Write-Host "  📋 $itemName" -ForegroundColor Yellow
+        Write-Host "     ├─ Breaking inheritance..." -ForegroundColor Gray
+        
+        # Step 2: Get all current permissions
+        $perms = Get-PnPListItemPermission -List $lib -Identity $item.Id
+        
+        # Step 3: Remove all permissions except the target group
+        Write-Host "     ├─ Removing existing groups..." -ForegroundColor Gray
+        foreach ($perm in $perms) {
+            # Skip if it's the group we want to keep
+            if ($perm.PrincipalId -ne $allowedGroup.Id) {
+                Remove-PnPListItemPermission -List $lib -Identity $item.Id -PrincipalId $perm.PrincipalId -Force
+                Write-Host "        └─ Removed: $($perm.Title)" -ForegroundColor Red
+            }
+        }
+        
+        # Step 4: Grant permission to NXT-CBS Directors (if not already granted)
+        $groupHasAccess = $perms | Where-Object {$_.PrincipalId -eq $allowedGroup.Id}
+        
+        if ($null -eq $groupHasAccess) {
+            Set-PnPListItemPermission -List $lib -Identity $item.Id -PrincipalId $allowedGroup.Id -AddRole "Edit" -ErrorAction Stop
+            Write-Host "     └─ ✓ Granted Edit permission to: $($allowedGroup.Title)" -ForegroundColor Green
+        } else {
+            Write-Host "     └─ ✓ $($allowedGroup.Title) already has permission" -ForegroundColor Green
+        }
+        
+        $processedCount++
+        
+    } catch {
+        Write-Host "     └─ ✗ ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        $errorCount++
+    }
+}
+
+# Summary
+Write-Host ""
+Write-Host "════════════════════════════════════════" -ForegroundColor Green
+Write-Host "TEST COMPLETE" -ForegroundColor Green
+Write-Host "════════════════════════════════════════" -ForegroundColor Green
+Write-Host "✓ Files Processed: $processedCount" -ForegroundColor Green
+Write-Host "✗ Errors: $errorCount" -ForegroundColor $(if ($errorCount -eq 0) {"Green"} else {"Red"})
+Write-Host "════════════════════════════════════════`n" -ForegroundColor Green
+
+if ($errorCount -eq 0 -and $processedCount -gt 0) {
+    Write-Host "✓ Test successful! You can now run on all libraries." -ForegroundColor Green
+}
+
+
