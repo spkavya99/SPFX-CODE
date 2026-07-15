@@ -379,3 +379,139 @@ try {
 
 Read-Host "Press Enter to close"
 
+
+
+
+
+
+fixed 1111111111
+
+
+# Find and restrict Archive items - FIXED VERSION
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SiteUrl,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$LibraryName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AllowedGroupName = "NXT-CBS Directors"
+)
+
+try {
+    Write-Host "Connecting to SharePoint..." -ForegroundColor Green
+    Connect-PnPOnline -Url $SiteUrl -Interactive
+
+    # Get admin group
+    $allowedGroup = Get-PnPGroup -Identity $AllowedGroupName -ErrorAction SilentlyContinue
+    if ($null -eq $allowedGroup) {
+        Write-Host "ERROR: Group '$AllowedGroupName' not found" -ForegroundColor Red
+        Get-PnPGroup | Select-Object Title
+        return
+    }
+
+    Write-Host "Admin Group: $($allowedGroup.Title)`n" -ForegroundColor Green
+
+    # Get the library
+    $lib = Get-PnPList -Identity $LibraryName -ErrorAction SilentlyContinue
+    if ($null -eq $lib) {
+        Write-Host "ERROR: Library '$LibraryName' not found" -ForegroundColor Red
+        Get-PnPList | Where-Object {$_.BaseType -eq "DocumentLibrary"} | Select-Object Title
+        return
+    }
+
+    Write-Host "Library: $($lib.Title)" -ForegroundColor Cyan
+    Write-Host "═════════════════════════════════════`n" -ForegroundColor Cyan
+
+    # Get all items
+    $allItems = Get-PnPListItem -List $lib -PageSize 5000
+
+    Write-Host "Total items in library: $($allItems.Count)`n"
+
+    # Find items where "Document Type" column = "Archive"
+    $archiveItems = @()
+    
+    foreach ($item in $allItems) {
+        $fileName = $item.FieldValues.FileLeafRef
+        
+        # Check each field to find Document Type
+        foreach ($field in $item.FieldValues.Keys) {
+            if ($field -like "*Document*Type*" -or $field -eq "Document_x0020_Type") {
+                $documentTypeValue = $item.FieldValues[$field]
+                
+                if ($documentTypeValue -eq "Archive") {
+                    $archiveItems += $item
+                    Write-Host "Found: $fileName (Document Type: $documentTypeValue)" -ForegroundColor Green
+                }
+            }
+        }
+    }
+
+    if ($archiveItems.Count -eq 0) {
+        Write-Host "`n⚠ No items with 'Archive' document type found" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "`n═════════════════════════════════════" -ForegroundColor Green
+    Write-Host "Found $($archiveItems.Count) Archive items" -ForegroundColor Green
+    Write-Host "═════════════════════════════════════`n" -ForegroundColor Green
+
+    $processedCount = 0
+    $errorCount = 0
+
+    foreach ($item in $archiveItems) {
+        $itemName = $item.FieldValues.FileLeafRef
+        $itemId = $item.Id
+        
+        try {
+            Write-Host "📋 $itemName" -ForegroundColor Yellow
+            
+            # Step 1: Break inheritance using REST API approach
+            Write-Host "   ├─ Breaking inheritance..." -ForegroundColor Gray
+            $uri = "$($SiteUrl)/_api/web/lists/getbyid('$($lib.Id)')/items($itemId)/breakroleinheritance(true)"
+            Invoke-PnPSPRestMethod -Url $uri -Method POST | Out-Null
+            
+            # Step 2: Get current permissions
+            $perms = Get-PnPListItemPermission -List $lib -Identity $itemId
+            
+            # Step 3: Remove all permissions except target group
+            Write-Host "   ├─ Removing groups..." -ForegroundColor Gray
+            foreach ($perm in $perms) {
+                if ($perm.PrincipalId -ne $allowedGroup.Id) {
+                    Remove-PnPListItemPermission -List $lib -Identity $itemId -PrincipalId $perm.PrincipalId -Force
+                    Write-Host "      └─ Removed: $($perm.Title)" -ForegroundColor Red
+                }
+            }
+            
+            # Step 4: Grant permission to allowed group only
+            $groupHasAccess = $perms | Where-Object {$_.PrincipalId -eq $allowedGroup.Id}
+            if ($null -eq $groupHasAccess) {
+                Set-PnPListItemPermission -List $lib -Identity $itemId -PrincipalId $allowedGroup.Id -AddRole "Edit" -ErrorAction Stop
+                Write-Host "   └─ ✓ Granted Edit to: $($allowedGroup.Title)" -ForegroundColor Green
+            } else {
+                Write-Host "   └─ ✓ $($allowedGroup.Title) already has access" -ForegroundColor Green
+            }
+            
+            Write-Host ""
+            $processedCount++
+            
+        } catch {
+            Write-Host "   └─ ✗ ERROR: $($_.Exception.Message)" -ForegroundColor Red
+            $errorCount++
+        }
+    }
+
+    # Summary
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "COMPLETE" -ForegroundColor Green
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "✓ Processed: $processedCount" -ForegroundColor Green
+    Write-Host "✗ Errors: $errorCount" -ForegroundColor $(if ($errorCount -eq 0) {"Green"} else {"Red"})
+    Write-Host "════════════════════════════════════`n" -ForegroundColor Green
+
+} catch {
+    Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+Read-Host "Press Enter to close"
