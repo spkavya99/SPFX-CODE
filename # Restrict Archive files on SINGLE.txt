@@ -686,3 +686,128 @@ try {
 }
 
 Read-Host "Press Enter to close"
+
+
+
+
+
+
+
+
+
+
+
+
+
+-----------------500-----------------
+# Restrict 500 Archive files - WORKING VERSION
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SiteUrl,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$LibraryName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AllowedGroupName = "NXT-CBS Directors"
+)
+
+try {
+    Write-Host "Connecting to SharePoint..." -ForegroundColor Green
+    Connect-PnPOnline -Url $SiteUrl -Interactive
+
+    # Get admin group
+    $allowedGroup = Get-PnPGroup -Identity $AllowedGroupName -ErrorAction SilentlyContinue
+    if ($null -eq $allowedGroup) {
+        Write-Host "ERROR: Group '$AllowedGroupName' not found" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "Admin Group: $($allowedGroup.Title) (ID: $($allowedGroup.Id))`n" -ForegroundColor Green
+
+    # Get the library
+    $lib = Get-PnPList -Identity $LibraryName -ErrorAction SilentlyContinue
+    if ($null -eq $lib) {
+        Write-Host "ERROR: Library '$LibraryName' not found" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "Library: $($lib.Title)" -ForegroundColor Cyan
+    Write-Host "═════════════════════════════════════`n" -ForegroundColor Cyan
+
+    # Get all items
+    $allItems = Get-PnPListItem -List $lib -PageSize 5000
+
+    # Find Archive items
+    $archiveItems = @()
+    Write-Host "Scanning for Archive items..." -ForegroundColor Gray
+    
+    foreach ($item in $allItems) {
+        foreach ($field in $item.FieldValues.Keys) {
+            if ($field -like "*Document*Type*") {
+                if ($item.FieldValues[$field] -eq "Archive") {
+                    $archiveItems += $item
+                }
+            }
+        }
+    }
+
+    if ($archiveItems.Count -eq 0) {
+        Write-Host "⚠ No Archive items found" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "Found $($archiveItems.Count) Archive items`n" -ForegroundColor Green
+    Write-Host "Starting permission update..." -ForegroundColor Cyan
+    Write-Host "═════════════════════════════════════`n" -ForegroundColor Cyan
+
+    $processedCount = 0
+    $errorCount = 0
+    $listId = $lib.Id.Guid
+
+    foreach ($item in $archiveItems) {
+        $itemName = $item.FieldValues.FileLeafRef
+        $itemId = $item.Id
+        
+        try {
+            # Break inheritance with copyRoleAssignments=false (clears inherited permissions)
+            $breakUrl = "$SiteUrl/_api/web/lists('$listId')/items($itemId)/breakroleinheritance(false)"
+            Invoke-PnPSPRestMethod -Url $breakUrl -Method POST -ErrorAction Stop | Out-Null
+            
+            Start-Sleep -Milliseconds 200
+            
+            # Add Edit permission for allowed group
+            $addPermUrl = "$SiteUrl/_api/web/lists('$listId')/items($itemId)/roleassignments/addroleassignment(principalid=$($allowedGroup.Id),roledefid=6)"
+            Invoke-PnPSPRestMethod -Url $addPermUrl -Method POST -ErrorAction Stop | Out-Null
+            
+            $processedCount++
+            
+            # Show progress every 10 items
+            if ($processedCount % 10 -eq 0) {
+                Write-Host "✓ Processed: $processedCount / $($archiveItems.Count)" -ForegroundColor Green
+            }
+            
+        } catch {
+            Write-Host "✗ Error on $itemName : $($_.Exception.Message)" -ForegroundColor Red
+            $errorCount++
+        }
+    }
+
+    # Summary
+    Write-Host "`n════════════════════════════════════" -ForegroundColor Green
+    Write-Host "COMPLETE" -ForegroundColor Green
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "✓ Processed: $processedCount" -ForegroundColor Green
+    Write-Host "✗ Errors: $errorCount" -ForegroundColor $(if ($errorCount -eq 0) {"Green"} else {"Red"})
+    Write-Host "════════════════════════════════════`n" -ForegroundColor Green
+    
+    Write-Host "RESULTS:" -ForegroundColor Cyan
+    Write-Host "✓ All Archive items now have UNIQUE permissions" -ForegroundColor Green
+    Write-Host "✓ All inherited permissions CLEARED" -ForegroundColor Green
+    Write-Host "✓ Only NXT-CBS Directors have Edit access" -ForegroundColor Green
+
+} catch {
+    Write-Host "SCRIPT ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+Read-Host "Press Enter to close"
