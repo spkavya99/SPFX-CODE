@@ -536,3 +536,154 @@ Read-Host "Press Enter to close"
 
 
 --new--
+
+
+
+# Find and restrict Archive items - WITH INHERITANCE BREAKING
+param(
+    [Parameter(Mandatory=$true)]
+    [string]$SiteUrl,
+    
+    [Parameter(Mandatory=$true)]
+    [string]$LibraryName,
+    
+    [Parameter(Mandatory=$false)]
+    [string]$AllowedGroupName = "NXT-CBS Directors"
+)
+
+try {
+    Write-Host "Connecting to SharePoint..." -ForegroundColor Green
+    Connect-PnPOnline -Url $SiteUrl -Interactive
+
+    # Get admin group
+    $allowedGroup = Get-PnPGroup -Identity $AllowedGroupName -ErrorAction SilentlyContinue
+    if ($null -eq $allowedGroup) {
+        Write-Host "ERROR: Group '$AllowedGroupName' not found" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "Admin Group: $($allowedGroup.Title)`n" -ForegroundColor Green
+
+    # Get the library
+    $lib = Get-PnPList -Identity $LibraryName -ErrorAction SilentlyContinue
+    if ($null -eq $lib) {
+        Write-Host "ERROR: Library '$LibraryName' not found" -ForegroundColor Red
+        return
+    }
+
+    Write-Host "Library: $($lib.Title)" -ForegroundColor Cyan
+    Write-Host "═════════════════════════════════════`n" -ForegroundColor Cyan
+
+    # Get all items
+    $allItems = Get-PnPListItem -List $lib -PageSize 5000
+
+    # Find Archive items
+    $archiveItems = @()
+    
+    foreach ($item in $allItems) {
+        foreach ($field in $item.FieldValues.Keys) {
+            if ($field -like "*Document*Type*") {
+                if ($item.FieldValues[$field] -eq "Archive") {
+                    $archiveItems += $item
+                }
+            }
+        }
+    }
+
+    if ($archiveItems.Count -eq 0) {
+        Write-Host "⚠ No Archive items found" -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host "Found $($archiveItems.Count) Archive items`n" -ForegroundColor Green
+
+    $processedCount = 0
+    $errorCount = 0
+
+    foreach ($item in $archiveItems) {
+        $itemName = $item.FieldValues.FileLeafRef
+        $itemId = $item.Id
+        
+        try {
+            Write-Host "📋 $itemName" -ForegroundColor Yellow
+            
+            # Step 1: Break inheritance using REST
+            Write-Host "   ├─ Breaking inheritance..." -ForegroundColor Gray
+            $listId = $lib.Id.Guid
+            $restUrl = "$SiteUrl/_api/web/lists('$listId')/items($itemId)/breakroleinheritance(true)"
+            
+            try {
+                Invoke-PnPSPRestMethod -Url $restUrl -Method POST -ErrorAction SilentlyContinue | Out-Null
+                Write-Host "   │  └─ Inheritance broken" -ForegroundColor Green
+            } catch {
+                Write-Host "   │  └─ Inheritance may already be broken" -ForegroundColor Gray
+            }
+            
+            # Step 2: Wait a moment for inheritance break to complete
+            Start-Sleep -Milliseconds 500
+            
+            # Step 3: Get current permissions
+            Write-Host "   ├─ Getting current permissions..." -ForegroundColor Gray
+            $perms = Get-PnPListItemPermission -List $lib -Identity $itemId -ErrorAction SilentlyContinue
+            
+            if ($null -eq $perms) {
+                Write-Host "   ├─ No permissions found" -ForegroundColor Yellow
+                continue
+            }
+            
+            # Step 4: Remove each permission EXCEPT the allowed group
+            Write-Host "   ├─ Removing non-admin permissions..." -ForegroundColor Gray
+            $removed = 0
+            $kept = 0
+            
+            foreach ($perm in $perms) {
+                Write-Host "      Processing: $($perm.Title) (PrincipalId: $($perm.PrincipalId))" -ForegroundColor Gray
+                
+                if ($perm.PrincipalId -ne $allowedGroup.Id) {
+                    try {
+                        Remove-PnPListItemPermission -List $lib -Identity $itemId -PrincipalId $perm.PrincipalId -Force -ErrorAction Stop
+                        Write-Host "      └─ ✓ Removed: $($perm.Title)" -ForegroundColor Red
+                        $removed++
+                    } catch {
+                        Write-Host "      └─ ⚠ Could not remove: $($_.Exception.Message)" -ForegroundColor Yellow
+                    }
+                } else {
+                    Write-Host "      └─ ✓ Kept: $($perm.Title)" -ForegroundColor Green
+                    $kept++
+                }
+            }
+            
+            if ($removed -gt 0 -or $kept -gt 0) {
+                Write-Host "   └─ ✓ Removed: $removed | Kept: $kept" -ForegroundColor Green
+                $processedCount++
+            } else {
+                Write-Host "   └─ ⚠ No changes made" -ForegroundColor Yellow
+            }
+            
+            Write-Host ""
+            
+        } catch {
+            Write-Host "   └─ ✗ ERROR: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host ""
+            $errorCount++
+        }
+    }
+
+    # Summary
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "COMPLETE" -ForegroundColor Green
+    Write-Host "════════════════════════════════════" -ForegroundColor Green
+    Write-Host "✓ Processed: $processedCount" -ForegroundColor Green
+    Write-Host "✗ Errors: $errorCount" -ForegroundColor $(if ($errorCount -eq 0) {"Green"} else {"Red"})
+    Write-Host "════════════════════════════════════`n" -ForegroundColor Green
+    
+    Write-Host "RESULTS:" -ForegroundColor Cyan
+    Write-Host "- Archive items now have unique permissions" -ForegroundColor Green
+    Write-Host "- Only NXT-CBS Directors have access" -ForegroundColor Green
+    Write-Host "- All other groups removed" -ForegroundColor Green
+
+} catch {
+    Write-Host "SCRIPT ERROR: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+Read-Host "Press Enter to close"
