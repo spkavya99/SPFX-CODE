@@ -1,6 +1,6 @@
 # ========================================
-# SharePoint Location Comparison - FIXED
-# Removes -All parameter issue
+# SharePoint Location Comparison
+# Using REST API (more reliable)
 # ========================================
 
 $SiteUrl = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
@@ -9,7 +9,6 @@ $OutputPath = "C:\Reports"
 Write-Host "`nSharePoint Location Comparison`n" -ForegroundColor Green
 Write-Host "Site: $SiteUrl`n"
 
-# Create reports folder
 if (-not (Test-Path $OutputPath)) {
     New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
 }
@@ -25,54 +24,43 @@ try {
     exit
 }
 
-# Get AllActiveUsers
-Write-Host "Fetching AllActiveUsers (Location column)..."
+# Get AllActiveUsers using REST API
+Write-Host "Fetching AllActiveUsers..."
 try {
-    $users = @()
-    $pageSize = 4000
-    $pageNum = 0
+    $restUrl = "$SiteUrl/_api/web/lists/getbytitle('AllActiveUsers')/items?`$select=Title,Location&`$top=5000"
+    $allUsers = @()
     
     do {
-        Write-Host "  Loading page $($pageNum + 1)..."
-        $batch = Get-PnPListItem -List "AllActiveUsers" -Fields "Location" -PageSize $pageSize -StartRow ($pageNum * $pageSize) | Select-Object `
-            @{N="Location";E={$_["Location"]}}, `
-            @{N="Title";E={$_["Title"]}}
-        
-        if ($batch.Count -eq 0) { break }
-        $users += $batch
-        $pageNum++
-    } while ($batch.Count -eq $pageSize)
+        $response = Invoke-PnPSPRestMethod -Url $restUrl -Method Get
+        $allUsers += $response.value
+        $restUrl = $response."odata.nextLink"
+    } while ($restUrl)
     
-    Write-Host "Found $($users.Count) total users`n" -ForegroundColor Green
+    Write-Host "Found $($allUsers.Count) users`n" -ForegroundColor Green
 } catch {
-    Write-Host "ERROR reading AllActiveUsers: $_" -ForegroundColor Red
-    Write-Host "List name might be wrong (case-sensitive). Check: Settings > General Settings" -ForegroundColor Yellow
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    Write-Host "Make sure list name is 'AllActiveUsers' (case-sensitive)" -ForegroundColor Yellow
     Disconnect-PnPOnline
     Read-Host "Press Enter to exit"
     exit
 }
 
-# Get TranslationTable
-Write-Host "Fetching TranslationTable (PS_Location column)..."
+# Get TranslationTable using REST API
+Write-Host "Fetching TranslationTable..."
 try {
+    $restUrl = "$SiteUrl/_api/web/lists/getbytitle('TranslationTable')/items?`$select=PS_Location&`$top=5000"
     $translations = @()
-    $pageSize = 4000
-    $pageNum = 0
     
     do {
-        Write-Host "  Loading page $($pageNum + 1)..."
-        $batch = Get-PnPListItem -List "TranslationTable" -Fields "PS_Location" -PageSize $pageSize -StartRow ($pageNum * $pageSize) | Select-Object `
-            @{N="PS_Location";E={$_["PS_Location"]}}
-        
-        if ($batch.Count -eq 0) { break }
-        $translations += $batch
-        $pageNum++
-    } while ($batch.Count -eq $pageSize)
+        $response = Invoke-PnPSPRestMethod -Url $restUrl -Method Get
+        $translations += $response.value
+        $restUrl = $response."odata.nextLink"
+    } while ($restUrl)
     
-    Write-Host "Found $($translations.Count) translation records`n" -ForegroundColor Green
+    Write-Host "Found $($translations.Count) records`n" -ForegroundColor Green
 } catch {
-    Write-Host "ERROR reading TranslationTable: $_" -ForegroundColor Red
-    Write-Host "List name might be wrong (case-sensitive). Check: Settings > General Settings" -ForegroundColor Yellow
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    Write-Host "Make sure list name is 'TranslationTable' (case-sensitive)" -ForegroundColor Yellow
     Disconnect-PnPOnline
     Read-Host "Press Enter to exit"
     exit
@@ -80,8 +68,8 @@ try {
 
 # Extract unique locations
 Write-Host "Processing data..."
-$userLocations = $users | Where-Object {$_.Location -and $_.Location -ne ""} | Select-Object -ExpandProperty Location -Unique | Sort-Object
-$translationLocations = $translations | Where-Object {$_."PS_Location" -and $_."PS_Location" -ne ""} | Select-Object -ExpandProperty "PS_Location" -Unique | Sort-Object
+$userLocations = $allUsers | Where-Object {$_.Location} | Select-Object -ExpandProperty Location -Unique | Sort-Object
+$translationLocations = $translations | Where-Object {$_.PS_Location} | Select-Object -ExpandProperty PS_Location -Unique | Sort-Object
 
 Write-Host "`nUnique Locations Found:" -ForegroundColor Cyan
 Write-Host "  AllActiveUsers: $($userLocations.Count) locations"
@@ -91,9 +79,10 @@ Write-Host "  TranslationTable: $($translationLocations.Count) locations`n"
 $results = @()
 
 # Missing in TranslationTable
+Write-Host "Analyzing locations..."
 foreach ($location in $userLocations) {
     if ($location -notin $translationLocations) {
-        $count = @($users | Where-Object {$_.Location -eq $location}).Count
+        $count = @($allUsers | Where-Object {$_.Location -eq $location}).Count
         $results += [PSCustomObject]@{
             Location = $location
             Status = "MISSING in TranslationTable"
@@ -106,7 +95,7 @@ foreach ($location in $userLocations) {
 # Matched
 foreach ($location in $userLocations) {
     if ($location -in $translationLocations) {
-        $count = @($users | Where-Object {$_.Location -eq $location}).Count
+        $count = @($allUsers | Where-Object {$_.Location -eq $location}).Count
         $results += [PSCustomObject]@{
             Location = $location
             Status = "OK - Matched"
@@ -129,7 +118,7 @@ foreach ($location in $translationLocations) {
 }
 
 # Display Results
-Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host "COMPARISON RESULTS:" -ForegroundColor Cyan
 Write-Host "════════════════════════════════════════`n" -ForegroundColor Cyan
 
@@ -159,10 +148,10 @@ if ($missingInAU -gt 0) {
     }
 }
 
-# Export to CSV
-Write-Host "`n════════════════════════════════════════" -ForegroundColor Green
-Write-Host "Exporting report..." -ForegroundColor Green
+Write-Host "`n"
 
+# Export to CSV
+Write-Host "Exporting report..." -ForegroundColor Green
 $csvPath = "$OutputPath\LocationComparison_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
 
 try {
@@ -172,7 +161,7 @@ try {
     Write-Host "ERROR exporting: $_" -ForegroundColor Red
 }
 
-Write-Host "════════════════════════════════════════`n" -ForegroundColor Green
+Write-Host "`n════════════════════════════════════════`n" -ForegroundColor Green
 
 Disconnect-PnPOnline
 
