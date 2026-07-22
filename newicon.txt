@@ -1811,3 +1811,218 @@ public onInit(): Promise<void> {
   document.head.appendChild(style);
   return Promise.resolve();
 }
+
+
+
+
+
+
+_____________new ____________
+
+# ========================================
+# SharePoint Online Location Comparison
+# Simple version for AllActiveUsers vs TranslationTable
+# ========================================
+
+# CONFIGURATION - UPDATE THESE VALUES
+$SiteUrl = "https://yourcompany.sharepoint.com/sites/yoursite"
+$AllActiveUsersList = "AllActiveUsers"
+$TranslationTableList = "TranslationTable"
+$ReportPath = "C:\Reports\LocationComparison_$(Get-Date -Format 'yyyyMMdd_HHmmss').xlsx"
+
+Write-Host "Location Comparison Report" -ForegroundColor Cyan
+Write-Host "==========================`n"
+
+# Install required modules if missing
+$modulesToInstall = @("PnP.PowerShell", "ImportExcel")
+foreach ($module in $modulesToInstall) {
+    if (-not (Get-Module -ListAvailable -Name $module)) {
+        Write-Host "Installing $module..."
+        Install-Module -Name $module -Force -AllowClobber
+    }
+}
+
+Import-Module PnP.PowerShell -ErrorAction SilentlyContinue
+Import-Module ImportExcel -ErrorAction SilentlyContinue
+
+try {
+    # Connect to SharePoint
+    Write-Host "Connecting to SharePoint: $SiteUrl"
+    Connect-PnPOnline -Url $SiteUrl -Interactive
+
+    # Get data from AllActiveUsers list
+    Write-Host "Fetching AllActiveUsers..."
+    $allActiveUsers = Get-PnPListItem -List $AllActiveUsersList -Fields "Location" -ErrorAction SilentlyContinue
+    
+    if (-not $allActiveUsers) {
+        Write-Host "Warning: No data found in $AllActiveUsersList" -ForegroundColor Yellow
+        $allActiveUsersList_data = @()
+    } else {
+        $allActiveUsersList_data = $allActiveUsers | ForEach-Object {
+            [PSCustomObject]@{
+                Location = $_["Location"]
+                EmployeeName = $_["Title"]
+                EmployeeID = $_["Employee_x0020_ID"]
+            }
+        }
+    }
+    
+    Write-Host "  Found $($allActiveUsers.Count) users"
+
+    # Get data from TranslationTable list
+    Write-Host "Fetching TranslationTable..."
+    $translationTable = Get-PnPListItem -List $TranslationTableList -Fields "PS_Location,PSGroup,Location" -ErrorAction SilentlyContinue
+    
+    if (-not $translationTable) {
+        Write-Host "Warning: No data found in $TranslationTableList" -ForegroundColor Yellow
+        $translationTable_data = @()
+    } else {
+        $translationTable_data = $translationTable | ForEach-Object {
+            [PSCustomObject]@{
+                PS_Location = $_["PS_Location"]
+                PSGroup = $_["PSGroup"]
+                Location = $_["Location"]
+            }
+        }
+    }
+    
+    Write-Host "  Found $($translationTable.Count) translation records`n"
+
+    # Extract unique locations
+    $allActiveUsersLocations = $allActiveUsersList_data | 
+        Where-Object { $_.Location } | 
+        Select-Object -ExpandProperty Location | 
+        Sort-Object -Unique
+
+    $translationTableLocations = $translationTable_data | 
+        Where-Object { $_."PS_Location" } | 
+        Select-Object -ExpandProperty "PS_Location" | 
+        Sort-Object -Unique
+
+    Write-Host "Unique Locations Found:" -ForegroundColor Green
+    Write-Host "  AllActiveUsers: $($allActiveUsersLocations.Count)"
+    Write-Host "  TranslationTable: $($translationTableLocations.Count)`n"
+
+    # Compare locations
+    $comparisonResults = @()
+
+    # Find missing in TranslationTable
+    foreach ($location in $allActiveUsersLocations) {
+        $userCount = ($allActiveUsersList_data | Where-Object { $_.Location -eq $location } | Measure-Object).Count
+        
+        if ($location -notin $translationTableLocations) {
+            $comparisonResults += [PSCustomObject]@{
+                Location = $location
+                Status = "MISSING in TranslationTable"
+                FoundIn = "AllActiveUsers Only"
+                UserCount = $userCount
+                Action = "ADD to TranslationTable"
+                Severity = "HIGH"
+            }
+        } else {
+            $comparisonResults += [PSCustomObject]@{
+                Location = $location
+                Status = "Matched"
+                FoundIn = "Both Tables"
+                UserCount = $userCount
+                Action = "None"
+                Severity = "OK"
+            }
+        }
+    }
+
+    # Find missing in AllActiveUsers
+    foreach ($location in $translationTableLocations) {
+        if ($location -notin $allActiveUsersLocations) {
+            $comparisonResults += [PSCustomObject]@{
+                Location = $location
+                Status = "MISSING in AllActiveUsers"
+                FoundIn = "TranslationTable Only"
+                UserCount = 0
+                Action = "Review/Remove"
+                Severity = "MEDIUM"
+            }
+        }
+    }
+
+    # Sort results
+    $comparisonResults = $comparisonResults | Sort-Object @{Expression={$_.Status -like "*MISSING*" ? 0 : 1}}, Location
+
+    # Calculate summary
+    $matched = ($comparisonResults | Where-Object { $_.Status -eq "Matched" } | Measure-Object).Count
+    $missingInTT = ($comparisonResults | Where-Object { $_.Status -eq "MISSING in TranslationTable" } | Measure-Object).Count
+    $missingInAU = ($comparisonResults | Where-Object { $_.Status -eq "MISSING in AllActiveUsers" } | Measure-Object).Count
+    $affectedUsers = ($comparisonResults | Where-Object { $_.Status -eq "MISSING in TranslationTable" } | Measure-Object -Sum -Property UserCount).Sum
+
+    # Create Summary Sheet
+    $summaryData = @(
+        [PSCustomObject]@{ Metric = "Report Date"; Value = Get-Date -Format "yyyy-MM-dd HH:mm:ss" }
+        [PSCustomObject]@{ Metric = "Site"; Value = $SiteUrl }
+        [PSCustomObject]@{ Metric = ""; Value = "" }
+        [PSCustomObject]@{ Metric = "Total Users"; Value = $allActiveUsersList_data.Count }
+        [PSCustomObject]@{ Metric = "Unique Locations (AllActiveUsers)"; Value = $allActiveUsersLocations.Count }
+        [PSCustomObject]@{ Metric = "Unique Locations (TranslationTable)"; Value = $translationTableLocations.Count }
+        [PSCustomObject]@{ Metric = ""; Value = "" }
+        [PSCustomObject]@{ Metric = "✓ Matched Locations"; Value = $matched }
+        [PSCustomObject]@{ Metric = "✗ Missing in TranslationTable"; Value = $missingInTT }
+        [PSCustomObject]@{ Metric = "  → Affected Users"; Value = $affectedUsers }
+        [PSCustomObject]@{ Metric = "✗ Missing in AllActiveUsers"; Value = $missingInAU }
+    )
+
+    # Create output directory
+    $outputDir = Split-Path -Path $ReportPath
+    if (-not (Test-Path $outputDir)) {
+        New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+    }
+
+    # Export to Excel
+    Write-Host "Creating Excel report..."
+    $summaryData | Export-Excel -Path $ReportPath -WorksheetName "Summary" -AutoSize -FreezePane 1,0
+    $comparisonResults | Export-Excel -Path $ReportPath -WorksheetName "Comparison" -AutoSize -Append -FreezePane 1,0
+
+    # Export missing items
+    $actionItems = $comparisonResults | Where-Object { $_.Action -ne "None" }
+    if ($actionItems.Count -gt 0) {
+        $actionItems | Export-Excel -Path $ReportPath -WorksheetName "Action Items" -AutoSize -Append -FreezePane 1,0
+    }
+
+    # Display Results
+    Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+    Write-Host "        LOCATION COMPARISON RESULTS" -ForegroundColor Cyan
+    Write-Host "════════════════════════════════════════`n" -ForegroundColor Cyan
+
+    Write-Host "📊 SUMMARY:" -ForegroundColor Green
+    Write-Host "  Total Users: $($allActiveUsersList_data.Count)"
+    Write-Host "  Locations in AllActiveUsers: $($allActiveUsersLocations.Count)"
+    Write-Host "  Locations in TranslationTable: $($translationTableLocations.Count)"
+    Write-Host "  ✓ Matched: $matched"
+    Write-Host "  ✗ Missing in TranslationTable: $missingInTT (affects $affectedUsers users)"
+    Write-Host "  ✗ Missing in AllActiveUsers: $missingInAU`n"
+
+    if ($missingInTT -gt 0) {
+        Write-Host "⚠️  ISSUE: Missing in TranslationTable (HIGH PRIORITY):" -ForegroundColor Red
+        $comparisonResults | Where-Object { $_.Status -eq "MISSING in TranslationTable" } | ForEach-Object {
+            Write-Host "    • $($_.Location) ($($_.UserCount) users)"
+        }
+        Write-Host ""
+    }
+
+    if ($missingInAU -gt 0) {
+        Write-Host "⚠️  ISSUE: Missing in AllActiveUsers:" -ForegroundColor Yellow
+        $comparisonResults | Where-Object { $_.Status -eq "MISSING in AllActiveUsers" } | ForEach-Object {
+            Write-Host "    • $($_.Location)"
+        }
+        Write-Host ""
+    }
+
+    Write-Host "✅ Report saved to:" -ForegroundColor Green
+    Write-Host "   $ReportPath`n"
+
+    Write-Host "════════════════════════════════════════" -ForegroundColor Cyan
+
+    Disconnect-PnPOnline
+
+}
+catch {
+    Write-Host "❌ Error: $_" -ForegroundColor Red
+}
