@@ -2026,3 +2026,152 @@ try {
 catch {
     Write-Host "❌ Error: $_" -ForegroundColor Red
 }
+
+
+
+____________new111_________________
+
+# ========================================
+# SharePoint Location Comparison - SIMPLE
+# ========================================
+
+# CONFIGURATION
+$SiteUrl = "https://yourcompany.sharepoint.com/sites/yoursite"
+$OutputPath = "C:\Reports"
+
+Write-Host "SharePoint Location Comparison`n" -ForegroundColor Green
+
+# Step 1: Create reports folder
+if (-not (Test-Path $OutputPath)) {
+    New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+}
+
+# Step 2: Connect to SharePoint
+Write-Host "Connecting to SharePoint..."
+try {
+    Connect-PnPOnline -Url $SiteUrl -Interactive
+    Write-Host "Connected!`n" -ForegroundColor Green
+} catch {
+    Write-Host "Connection failed: $_" -ForegroundColor Red
+    exit
+}
+
+# Step 3: Get AllActiveUsers data
+Write-Host "Fetching AllActiveUsers..."
+try {
+    $users = Get-PnPListItem -List "AllActiveUsers" -Fields "Location" | Select-Object `
+        @{N="Location";E={$_["Location"]}}, `
+        @{N="Employee";E={$_["Title"]}}
+    
+    Write-Host "Found $($users.Count) users`n" -ForegroundColor Green
+} catch {
+    Write-Host "Error reading AllActiveUsers: $_" -ForegroundColor Red
+    Disconnect-PnPOnline
+    exit
+}
+
+# Step 4: Get TranslationTable data
+Write-Host "Fetching TranslationTable..."
+try {
+    $translations = Get-PnPListItem -List "TranslationTable" -Fields "PS_Location" | Select-Object `
+        @{N="PS_Location";E={$_["PS_Location"]}}
+    
+    Write-Host "Found $($translations.Count) records`n" -ForegroundColor Green
+} catch {
+    Write-Host "Error reading TranslationTable: $_" -ForegroundColor Red
+    Disconnect-PnPOnline
+    exit
+}
+
+# Step 5: Extract unique locations
+$userLocations = $users | Where-Object {$_.Location} | Select-Object -ExpandProperty Location -Unique | Sort-Object
+$translationLocations = $translations | Where-Object {$_."PS_Location"} | Select-Object -ExpandProperty "PS_Location" -Unique | Sort-Object
+
+Write-Host "Comparison:`n" -ForegroundColor Cyan
+Write-Host "  AllActiveUsers locations: $($userLocations.Count)"
+Write-Host "  TranslationTable locations: $($translationLocations.Count)`n"
+
+# Step 6: Create comparison results
+$results = @()
+
+# Missing in TranslationTable
+foreach ($location in $userLocations) {
+    if ($location -notin $translationLocations) {
+        $count = @($users | Where-Object {$_.Location -eq $location}).Count
+        $results += @{
+            Location = $location
+            Status = "MISSING in TranslationTable"
+            Users = $count
+            Action = "ADD"
+        }
+    }
+}
+
+# Matched
+foreach ($location in $userLocations) {
+    if ($location -in $translationLocations) {
+        $count = @($users | Where-Object {$_.Location -eq $location}).Count
+        $results += @{
+            Location = $location
+            Status = "OK - Matched"
+            Users = $count
+            Action = "None"
+        }
+    }
+}
+
+# Missing in AllActiveUsers
+foreach ($location in $translationLocations) {
+    if ($location -notin $userLocations) {
+        $results += @{
+            Location = $location
+            Status = "MISSING in AllActiveUsers"
+            Users = 0
+            Action = "REMOVE"
+        }
+    }
+}
+
+# Step 7: Display results
+Write-Host "RESULTS:`n" -ForegroundColor Cyan
+
+# Count issues
+$missingInTT = @($results | Where-Object {$_.Status -eq "MISSING in TranslationTable"}).Count
+$missingInAU = @($results | Where-Object {$_.Status -eq "MISSING in AllActiveUsers"}).Count
+$matched = @($results | Where-Object {$_.Status -eq "OK - Matched"}).Count
+
+Write-Host "✓ Matched: $matched" -ForegroundColor Green
+Write-Host "✗ Missing in TranslationTable: $missingInTT" -ForegroundColor Red
+Write-Host "✗ Missing in AllActiveUsers: $missingInAU" -ForegroundColor Yellow
+
+if ($missingInTT -gt 0) {
+    Write-Host "`nMISSING IN TRANSLATIONTABLE (ADD THESE):" -ForegroundColor Red
+    $results | Where-Object {$_.Status -eq "MISSING in TranslationTable"} | ForEach-Object {
+        Write-Host "  • $($_.Location) [$($_.Users) users]"
+    }
+}
+
+if ($missingInAU -gt 0) {
+    Write-Host "`nMISSING IN ALLACTIVEUSERS (REVIEW THESE):" -ForegroundColor Yellow
+    $results | Where-Object {$_.Status -eq "MISSING in AllActiveUsers"} | ForEach-Object {
+        Write-Host "  • $($_.Location)"
+    }
+}
+
+# Step 8: Export to CSV (simpler than Excel)
+Write-Host "`nExporting to CSV..." -ForegroundColor Green
+$csvPath = "$OutputPath\LocationComparison_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+
+$results | ForEach-Object {
+    [PSCustomObject]@{
+        Location = $_.Location
+        Status = $_.Status
+        UserCount = $_.Users
+        Action = $_.Action
+    }
+} | Export-Csv -Path $csvPath -NoTypeInformation
+
+Write-Host "Report saved: $csvPath`n" -ForegroundColor Green
+
+Disconnect-PnPOnline
+Write-Host "Done!" -ForegroundColor Green
