@@ -2175,3 +2175,49 @@ Write-Host "Report saved: $csvPath`n" -ForegroundColor Green
 
 Disconnect-PnPOnline
 Write-Host "Done!" -ForegroundColor Green
+
+
+
+
+
+
+$SiteUrl   = "https://tenant.sharepoint.com/sites/YourSite"
+$ListName  = "YourList"
+$NullToken = "NULL"      # literal text you want cleared
+$WhatIf    = $true       # flip to $false to actually write
+
+Connect-PnPOnline -Url $SiteUrl -Interactive
+
+# Only writable, visible text fields
+$fields = Get-PnPField -List $ListName | Where-Object {
+    -not $_.ReadOnlyField -and -not $_.Hidden -and
+    $_.TypeAsString -in @("Text","Note")
+}
+
+$items   = Get-PnPListItem -List $ListName -PageSize 2000
+$batch   = New-PnPBatch
+$changed = 0
+
+foreach ($item in $items) {
+    $updates = @{}
+    foreach ($f in $fields) {
+        $val = $item[$f.InternalName]
+        if ($val -is [string] -and $val.Trim() -eq $NullToken) {
+            $updates[$f.InternalName] = ""
+        }
+    }
+
+    if ($updates.Count -gt 0) {
+        $changed++
+        Write-Host "Item $($item.Id): clearing $($updates.Keys -join ', ')"
+        if (-not $WhatIf) {
+            Set-PnPListItem -List $ListName -Identity $item.Id -Values $updates `
+                            -UpdateType SystemUpdate -Batch $batch
+        }
+    }
+
+    if ($batch.RequestCount -ge 100) { Invoke-PnPBatch -Batch $batch; $batch = New-PnPBatch }
+}
+
+if (-not $WhatIf -and $batch.RequestCount -gt 0) { Invoke-PnPBatch -Batch $batch }
+Write-Host "Items affected: $changed"
