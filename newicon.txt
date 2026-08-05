@@ -1,3 +1,49 @@
+____remove 0000s
+$SiteUrl  = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
+$ListName = "ToolChampionTable"
+$DateCols = @("1-Date","2-Date","3-Date","4-Date","5-Date")
+$WhatIf   = $true      # set to $false to actually write
+
+Connect-PnPOnline -Url $SiteUrl -UseWebLogin
+
+# Map display names -> internal names
+$fields = Get-PnPField -List $ListName | Where-Object { $DateCols -contains $_.Title }
+if ($fields.Count -ne $DateCols.Count) {
+    Write-Warning "Only matched: $($fields.Title -join ', ')"
+}
+$fields | ForEach-Object { Write-Host "$($_.Title) -> $($_.InternalName)" }
+
+$items   = Get-PnPListItem -List $ListName -PageSize 2000
+$batch   = New-PnPBatch
+$changed = 0
+
+foreach ($item in $items) {
+    $updates = @{}
+    foreach ($f in $fields) {
+        $val = $item[$f.InternalName]
+        if ($val -is [string] -and $val -match '\s*00:00:00\.000\s*$') {
+            $updates[$f.InternalName] = ($val -replace '\s*00:00:00\.000\s*$','').Trim()
+        }
+    }
+
+    if ($updates.Count -gt 0) {
+        $changed++
+        Write-Host "Item $($item.Id): $($updates.Values -join ' | ')"
+        if (-not $WhatIf) {
+            Set-PnPListItem -List $ListName -Identity $item.Id -Values $updates `
+                            -UpdateType SystemUpdate -Batch $batch
+        }
+    }
+
+    if (-not $WhatIf -and $batch.RequestCount -ge 100) {
+        Invoke-PnPBatch -Batch $batch; $batch = New-PnPBatch
+    }
+}
+
+if (-not $WhatIf -and $batch.RequestCount -gt 0) { Invoke-PnPBatch -Batch $batch }
+Write-Host "Items affected: $changed"
+
+
 -----------fulwidth--------------
 public onInit(): Promise<void> {
   const css = `
