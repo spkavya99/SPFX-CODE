@@ -1,3 +1,59 @@
+__copy list column 
+
+$SiteUrl   = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
+$ListName  = "ToolChampionTable"
+$CalcCol   = "YourCalcColumn"      # display name
+$NumCol    = "YourNumberColumn"    # display name
+$WhatIf    = $true                 # set to $false to write
+
+Connect-PnPOnline -Url $SiteUrl -UseWebLogin
+
+$allFields = Get-PnPField -List $ListName
+$calcField = $allFields | Where-Object { $_.Title -eq $CalcCol }
+$numField  = $allFields | Where-Object { $_.Title -eq $NumCol }
+
+if (-not $calcField -or -not $numField) { throw "Column not found. Check display names." }
+Write-Host "$CalcCol -> $($calcField.InternalName)"
+Write-Host "$NumCol  -> $($numField.InternalName)"
+
+$items   = Get-PnPListItem -List $ListName -PageSize 2000
+$batch   = New-PnPBatch
+$changed = 0
+$skipped = 0
+
+foreach ($item in $items) {
+    $raw = $item[$calcField.InternalName]
+
+    # Calculated values often arrive as "float;#12.5" or a plain string
+    if ($raw -is [string] -and $raw -like "*;#*") { $raw = $raw.Split("#")[-1] }
+
+    $clean = "$raw" -replace '[^\d\.\-]', ''    # strip $ , % spaces
+    $num = 0.0
+    if ([string]::IsNullOrWhiteSpace($clean) -or
+        -not [double]::TryParse($clean, [ref]$num)) {
+        $skipped++
+        continue
+    }
+
+    if ($item[$numField.InternalName] -eq $num) { continue }   # already correct
+
+    $changed++
+    Write-Host "Item $($item.Id): $num"
+    if (-not $WhatIf) {
+        Set-PnPListItem -List $ListName -Identity $item.Id `
+            -Values @{ $numField.InternalName = $num } `
+            -UpdateType SystemUpdate -Batch $batch
+    }
+
+    if (-not $WhatIf -and $batch.RequestCount -ge 100) {
+        Invoke-PnPBatch -Batch $batch; $batch = New-PnPBatch
+    }
+}
+
+if (-not $WhatIf -and $batch.RequestCount -gt 0) { Invoke-PnPBatch -Batch $batch }
+Write-Host "Updated: $changed   Skipped (blank/unparseable): $skipped"
+
+
 ____remove 0000s
 $SiteUrl  = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
 $ListName = "ToolChampionTable"
