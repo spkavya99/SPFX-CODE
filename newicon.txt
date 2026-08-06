@@ -1,3 +1,176 @@
+# ========================================
+# SharePoint TranslationFlag vs PSTranslationFlag Comparison
+# Compare: TranslationFlag (AllActiveUsers) with PSTranslationFlag (TranslationTable)
+# ========================================
+
+$SiteUrl = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
+$OutputPath = "C:\Reports"
+
+Write-Host "`nSharePoint TranslationFlag Comparison`n" -ForegroundColor Green
+Write-Host "Comparing: TranslationFlag (AllActiveUsers) vs PSTranslationFlag (TranslationTable)`n"
+Write-Host "Site: $SiteUrl`n"
+
+if (-not (Test-Path $OutputPath)) {
+    New-Item -ItemType Directory -Path $OutputPath -Force | Out-Null
+}
+
+# Connect to SharePoint
+Write-Host "Connecting to SharePoint..."
+try {
+    Connect-PnPOnline -Url $SiteUrl -Interactive
+    Write-Host "Connected!`n" -ForegroundColor Green
+} catch {
+    Write-Host "Connection failed: $_" -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit
+}
+
+# Get AllActiveUsers with TranslationFlag
+Write-Host "Fetching AllActiveUsers (TranslationFlag column)..."
+try {
+    $restUrl = "$SiteUrl/_api/web/lists/getbytitle('AllActiveUsers')/items?`$select=Title,TranslationFlag&`$top=5000"
+    $allUsers = @()
+    
+    do {
+        $response = Invoke-PnPSPRestMethod -Url $restUrl -Method Get
+        $allUsers += $response.value
+        $restUrl = $response."odata.nextLink"
+    } while ($restUrl)
+    
+    Write-Host "Found $($allUsers.Count) users`n" -ForegroundColor Green
+} catch {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    Disconnect-PnPOnline
+    Read-Host "Press Enter to exit"
+    exit
+}
+
+# ===== CHANGE 2: Get TranslationTable with PSTranslationFlag (not TranslationFlag) =====
+Write-Host "Fetching TranslationTable (PSTranslationFlag column)..."
+try {
+    $restUrl = "$SiteUrl/_api/web/lists/getbytitle('TranslationTable')/items?`$select=Title,PSTranslationFlag&`$top=5000"
+    $translations = @()
+    
+    do {
+        $response = Invoke-PnPSPRestMethod -Url $restUrl -Method Get
+        $translations += $response.value
+        $restUrl = $response."odata.nextLink"
+    } while ($restUrl)
+    
+    Write-Host "Found $($translations.Count) records`n" -ForegroundColor Green
+} catch {
+    Write-Host "ERROR: $_" -ForegroundColor Red
+    Disconnect-PnPOnline
+    Read-Host "Press Enter to exit"
+    exit
+}
+
+# Extract unique flags
+Write-Host "Processing data..."
+$userFlags = $allUsers | Where-Object {$_.TranslationFlag} | Select-Object -ExpandProperty TranslationFlag -Unique | Sort-Object
+
+# ===== CHANGE 3: Extract PSTranslationFlag (not TranslationFlag) =====
+$translationFlags = $translations | Where-Object {$_.PSTranslationFlag} | Select-Object -ExpandProperty PSTranslationFlag -Unique | Sort-Object
+
+Write-Host "`nUnique Flags Found:" -ForegroundColor Cyan
+Write-Host "  AllActiveUsers (TranslationFlag): $($userFlags.Count) flags"
+Write-Host "  TranslationTable (PSTranslationFlag): $($translationFlags.Count) flags`n"
+
+# Compare flags
+$results = @()
+
+# Missing in TranslationTable
+Write-Host "Analyzing flags..."
+foreach ($flag in $userFlags) {
+    if ($flag -notin $translationFlags) {
+        $count = @($allUsers | Where-Object {$_.TranslationFlag -eq $flag}).Count
+        $results += [PSCustomObject]@{
+            Flag = $flag
+            Status = "MISSING in TranslationTable (PSTranslationFlag)"
+            UsersWithFlag = $count
+            Action = "ADD to PSTranslationFlag"
+        }
+    }
+}
+
+# Matched
+foreach ($flag in $userFlags) {
+    if ($flag -in $translationFlags) {
+        $count = @($allUsers | Where-Object {$_.TranslationFlag -eq $flag}).Count
+        $results += [PSCustomObject]@{
+            Flag = $flag
+            Status = "OK - Matched"
+            UsersWithFlag = $count
+            Action = "None"
+        }
+    }
+}
+
+# Missing in AllActiveUsers
+foreach ($flag in $translationFlags) {
+    if ($flag -notin $userFlags) {
+        $results += [PSCustomObject]@{
+            Flag = $flag
+            Status = "MISSING in AllActiveUsers (TranslationFlag)"
+            UsersWithFlag = 0
+            Action = "REVIEW"
+        }
+    }
+}
+
+# Display Results
+Write-Host "`n════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "COMPARISON RESULTS:" -ForegroundColor Cyan
+Write-Host "════════════════════════════════════════`n" -ForegroundColor Cyan
+
+$missingInTT = @($results | Where-Object {$_.Status -like "*MISSING in TranslationTable*"}).Count
+$missingInAU = @($results | Where-Object {$_.Status -like "*MISSING in AllActiveUsers*"}).Count
+$matched = @($results | Where-Object {$_.Status -eq "OK - Matched"}).Count
+
+Write-Host "✓ Matched: $matched" -ForegroundColor Green
+Write-Host "✗ Missing in TranslationTable (PSTranslationFlag): $missingInTT" -ForegroundColor Red
+Write-Host "✗ Missing in AllActiveUsers (TranslationFlag): $missingInAU" -ForegroundColor Yellow
+
+if ($missingInTT -gt 0) {
+    Write-Host "`n──────────────────────────────────────────" -ForegroundColor Red
+    Write-Host "MISSING IN TRANSLATIONTABLE (ACTION NEEDED):" -ForegroundColor Red
+    Write-Host "──────────────────────────────────────────" -ForegroundColor Red
+    $results | Where-Object {$_.Status -like "*MISSING in TranslationTable*"} | ForEach-Object {
+        Write-Host "  ✗ Flag: '$($_.Flag)' [$($_.UsersWithFlag) users have this flag]"
+    }
+}
+
+if ($missingInAU -gt 0) {
+    Write-Host "`n──────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "MISSING IN ALLACTIVEUSERS (REVIEW THESE):" -ForegroundColor Yellow
+    Write-Host "──────────────────────────────────────────" -ForegroundColor Yellow
+    $results | Where-Object {$_.Status -like "*MISSING in AllActiveUsers*"} | ForEach-Object {
+        Write-Host "  ⚠ Flag: '$($_.Flag)'"
+    }
+}
+
+Write-Host "`n"
+
+# Export to CSV
+Write-Host "Exporting report..." -ForegroundColor Green
+$csvPath = "$OutputPath\TranslationFlagComparison_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+
+try {
+    $results | Export-Csv -Path $csvPath -NoTypeInformation
+    Write-Host "✓ Report saved: $csvPath" -ForegroundColor Green
+} catch {
+    Write-Host "ERROR exporting: $_" -ForegroundColor Red
+}
+
+Write-Host "`n════════════════════════════════════════`n" -ForegroundColor Green
+
+Disconnect-PnPOnline
+
+Write-Host "Done! Press Enter to close..." -ForegroundColor Green
+Read-Host
+
+
+
 __copy list column 
 
 $SiteUrl   = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
