@@ -1,3 +1,36 @@
+update list column value 
+# PnP.PowerShell 2.x+
+$SiteUrl  = "https://<tenant>.sharepoint.com/sites/NXT-CBS"
+$ListName = "<Your List Name>"
+$Field    = "field_7"        # display: Cert Category
+$OldValue = "Standard Work for Flow"
+$NewValue = "SWFF"
+
+Connect-PnPOnline -Url $SiteUrl -Interactive
+
+$camlQuery = @"
+<View Scope='RecursiveAll'>
+  <Query>
+    <Where>
+      <Eq><FieldRef Name='$Field'/><Value Type='Text'>$OldValue</Value></Eq>
+    </Where>
+  </Query>
+  <RowLimit>2000</RowLimit>
+</View>
+"@
+
+$items = Get-PnPListItem -List $ListName -Query $camlQuery -PageSize 2000
+Write-Host "Found $($items.Count) items to update."
+
+$batch = New-PnPBatch
+foreach ($item in $items) {
+    Set-PnPListItem -List $ListName -Identity $item.Id `
+        -Values @{ $Field = $NewValue } `
+        -UpdateType SystemUpdate -Batch $batch
+}
+Invoke-PnPBatch -Batch $batch
+Write-Host "Done."
+
 # ========================================
 # SharePoint TranslationFlag vs PSTranslationFlag Comparison
 # Compare: TranslationFlag (AllActiveUsers) with PSTranslationFlag (TranslationTable)
