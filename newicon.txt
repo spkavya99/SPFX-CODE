@@ -1,36 +1,38 @@
 update list column value 
-# PnP.PowerShell 2.x+
-$SiteUrl  = "https://<tenant>.sharepoint.com/sites/NXT-CBS"
-$ListName = "<Your List Name>"
-$Field    = "field_7"        # display: Cert Category
-$OldValue = "Standard Work for Flow"
-$NewValue = "SWFF"
 
-Connect-PnPOnline -Url $SiteUrl -Interactive
+$SiteUrl   = "https://cranenxt.sharepoint.com/sites/NXT-CBS"
+$ListName  = "ToolChampionTable"
+$Field     = "field_7"                      # Cert Category
+$OldValue  = "Standard Work for Flow"
+$NewValue  = "SWFF"
+$WhatIf    = $true                          # set to $false to actually write
 
-$camlQuery = @"
-<View Scope='RecursiveAll'>
-  <Query>
-    <Where>
-      <Eq><FieldRef Name='$Field'/><Value Type='Text'>$OldValue</Value></Eq>
-    </Where>
-  </Query>
-  <RowLimit>2000</RowLimit>
-</View>
-"@
+Connect-PnPOnline -Url $SiteUrl -UseWebLogin
 
-$items = Get-PnPListItem -List $ListName -Query $camlQuery -PageSize 2000
-Write-Host "Found $($items.Count) items to update."
+$items   = Get-PnPListItem -List $ListName -PageSize 2000
+$batch   = New-PnPBatch
+$changed = 0
 
-$batch = New-PnPBatch
 foreach ($item in $items) {
-    Set-PnPListItem -List $ListName -Identity $item.Id `
-        -Values @{ $Field = $NewValue } `
-        -UpdateType SystemUpdate -Batch $batch
-}
-Invoke-PnPBatch -Batch $batch
-Write-Host "Done."
+    if ($item[$Field] -ne $OldValue) { continue }
 
+    $changed++
+    Write-Host "Item $($item.Id): $OldValue -> $NewValue"
+
+    if (-not $WhatIf) {
+        Set-PnPListItem -List $ListName -Identity $item.Id `
+            -Values @{ $Field = $NewValue } `
+            -UpdateType SystemUpdate -Batch $batch
+    }
+
+    if (-not $WhatIf -and $batch.RequestCount -ge 100) {
+        Invoke-PnPBatch -Batch $batch
+        $batch = New-PnPBatch
+    }
+}
+
+if (-not $WhatIf -and $batch.RequestCount -gt 0) { Invoke-PnPBatch -Batch $batch }
+Write-Host "Items affected: $changed"
 # ========================================
 # SharePoint TranslationFlag vs PSTranslationFlag Comparison
 # Compare: TranslationFlag (AllActiveUsers) with PSTranslationFlag (TranslationTable)
